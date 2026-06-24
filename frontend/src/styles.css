@@ -268,8 +268,13 @@ textarea:focus {
 .editor-shell {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
   background: #11110f;
+  overflow: hidden;
+}
+
+.editor-shell.panels-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 .sidebar {
@@ -277,8 +282,20 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 100vh;
+  min-width: 0;
   overflow: auto;
   padding: 20px;
+}
+
+.panels-collapsed .sidebar {
+  border-right: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.panels-collapsed .sidebar > * {
+  display: none;
 }
 
 .back-link {
@@ -302,6 +319,7 @@ textarea:focus {
   gap: 12px;
 }
 
+.scene-panel,
 .character-panel,
 .inspector-panel {
   display: grid;
@@ -309,12 +327,14 @@ textarea:focus {
   padding: 18px;
 }
 
+.scene-list,
 .asset-list,
 .object-list {
   display: grid;
   gap: 8px;
 }
 
+.scene-row,
 .asset-row,
 .object-row {
   background: #171713;
@@ -323,6 +343,19 @@ textarea:focus {
   color: #fffaf0;
   min-width: 0;
   padding: 10px;
+}
+
+.scene-row {
+  cursor: pointer;
+  display: flex;
+  font-weight: 800;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.scene-row.selected {
+  border-color: #f4b860;
+  box-shadow: 0 0 0 2px rgba(244, 184, 96, 0.12);
 }
 
 .asset-row {
@@ -425,7 +458,9 @@ textarea:focus {
 .viewer-stage {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .viewer-toolbar {
@@ -455,12 +490,15 @@ textarea:focus {
 
 .viewer-frame,
 .viewer-empty {
+  height: 100%;
   min-height: 0;
   position: relative;
 }
 
 .viewer-frame canvas {
   display: block;
+  height: 100% !important;
+  width: 100% !important;
 }
 
 .viewer-empty {
@@ -518,14 +556,18 @@ textarea:focus {
 
   .editor-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .sidebar {
     border-right: 0;
+    height: auto;
     max-height: none;
   }
 
   .viewer-stage {
+    height: 70vh;
     min-height: 70vh;
   }
 }

@@ -81,6 +81,7 @@ class CharacterInstanceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     character_asset_id: int
+    scene_state_id: int | None = None
     name: str | None = Field(default=None, max_length=120)
 
     @field_validator("name", mode="before")
@@ -119,6 +120,7 @@ class CharacterInstanceUpdate(BaseModel):
 class CharacterInstance(BaseModel):
     id: int
     project_id: int
+    scene_state_id: int
     character_asset_id: int
     name: str
     position_x: float
@@ -129,5 +131,69 @@ class CharacterInstance(BaseModel):
     rotation_z: float
     scale: float
     visible: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+def clean_scene_state_name(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Scene state name is required.")
+    return stripped
+
+
+class SceneStateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = ""
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_and_validate_name(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Scene state name must be text.")
+        return clean_scene_state_name(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Scene state description must be text.")
+        return value
+
+
+class SceneStateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = None
+    sort_order: int | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_and_validate_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Scene state name must be text.")
+        return clean_scene_state_name(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def validate_optional_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Scene state description must be text.")
+        return value
+
+
+class SceneState(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    description: str
+    sort_order: int
     created_at: datetime
     updated_at: datetime

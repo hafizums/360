@@ -79,10 +79,33 @@ def upload_character_asset(client: TestClient, project_id: int, name: str = "her
     return response.json()
 
 
-def create_character_instance(client: TestClient, project_id: int, asset_id: int) -> dict:
+def create_character_instance(
+    client: TestClient,
+    project_id: int,
+    asset_id: int,
+    scene_state_id: int | None = None,
+) -> dict:
+    payload = {"character_asset_id": asset_id}
+    if scene_state_id is not None:
+        payload["scene_state_id"] = scene_state_id
     response = client.post(
         f"/api/projects/{project_id}/character-instances",
-        json={"character_asset_id": asset_id},
+        json=payload,
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def list_scene_states(client: TestClient, project_id: int) -> list[dict]:
+    response = client.get(f"/api/projects/{project_id}/scene-states")
+    assert response.status_code == 200
+    return response.json()
+
+
+def create_scene_state(client: TestClient, project_id: int, name: str = "Shot 2") -> dict:
+    response = client.post(
+        f"/api/projects/{project_id}/scene-states",
+        json={"name": name, "description": "A beat"},
     )
     assert response.status_code == 201
     return response.json()
@@ -102,6 +125,17 @@ def test_create_project_success() -> None:
     assert payload["description"] == "Notes"
     assert payload["source_image_path"] is None
     assert payload["panorama_image_path"] is None
+
+
+def test_new_project_automatically_has_default_scene_state() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        states = list_scene_states(client, project["id"])
+
+    assert len(states) == 1
+    assert states[0]["name"] == "Base Scene"
+    assert states[0]["sort_order"] == 0
 
 
 def test_whitespace_only_project_name_rejected() -> None:
@@ -366,6 +400,7 @@ def test_create_character_instance() -> None:
     assert response.status_code == 201
     payload = response.json()
     assert payload["character_asset_id"] == asset["id"]
+    assert payload["scene_state_id"] == list_scene_states(client, project["id"])[0]["id"]
     assert payload["position_x"] == 0
     assert payload["position_y"] == 0
     assert payload["position_z"] == -2
@@ -473,3 +508,203 @@ def test_delete_unused_asset_removes_model_file_safely() -> None:
     assert response.status_code == 200
     assert list_response.json() == []
     assert not model_file.exists()
+
+
+def test_list_scene_states() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        extra = create_scene_state(client, project["id"], "Shot 2")
+        response = client.get(f"/api/projects/{project['id']}/scene-states")
+
+    assert response.status_code == 200
+    names = [state["name"] for state in response.json()]
+    assert names == ["Base Scene", extra["name"]]
+
+
+def test_create_scene_state() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/scene-states",
+            json={"name": "  Shot 2  ", "description": "  Table beat  "},
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["name"] == "Shot 2"
+    assert payload["description"] == "Table beat"
+
+
+def test_reject_whitespace_only_scene_state_name() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/scene-states",
+            json={"name": "   ", "description": ""},
+        )
+
+    assert response.status_code == 422
+    assert "Scene state name is required" in response.text
+
+
+def test_update_scene_state_name_description() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"name": "  Opening Shot  ", "description": "  Near sofa  "},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "Opening Shot"
+    assert payload["description"] == "Near sofa"
+
+
+def test_delete_scene_state() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = create_scene_state(client, project["id"], "Shot 2")
+        response = client.delete(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+        )
+        states = list_scene_states(client, project["id"])
+
+    assert response.status_code == 200
+    assert [item["name"] for item in states] == ["Base Scene"]
+
+
+def test_block_deleting_last_scene_state() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        response = client.delete(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cannot delete the last scene state."
+
+
+def test_duplicate_scene_state_copies_character_instances() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"], state["id"])
+        client.patch(
+            f"/api/projects/{project['id']}/character-instances/{instance['id']}",
+            json={"position_x": 2.0, "rotation_y": 0.5, "scale": 1.8, "visible": False},
+        )
+
+        response = client.post(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}/duplicate",
+        )
+        duplicate_state = response.json()
+        copied_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": duplicate_state["id"]},
+        )
+
+    assert response.status_code == 201
+    assert duplicate_state["name"] == "Base Scene Copy"
+    copied = copied_response.json()
+    assert len(copied) == 1
+    assert copied[0]["scene_state_id"] == duplicate_state["id"]
+    assert copied[0]["character_asset_id"] == asset["id"]
+    assert copied[0]["position_x"] == 2.0
+    assert copied[0]["rotation_y"] == 0.5
+    assert copied[0]["scale"] == 1.8
+    assert copied[0]["visible"] is False
+
+
+def test_list_character_instances_by_scene_state_id() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        base_state = list_scene_states(client, project["id"])[0]
+        second_state = create_scene_state(client, project["id"], "Shot 2")
+        asset = upload_character_asset(client, project["id"])
+        base_instance = create_character_instance(client, project["id"], asset["id"], base_state["id"])
+        second_instance = create_character_instance(client, project["id"], asset["id"], second_state["id"])
+
+        base_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": base_state["id"]},
+        )
+        second_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": second_state["id"]},
+        )
+
+    assert [item["id"] for item in base_response.json()] == [base_instance["id"]]
+    assert [item["id"] for item in second_response.json()] == [second_instance["id"]]
+
+
+def test_adding_character_to_one_scene_state_does_not_appear_in_another() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        base_state = list_scene_states(client, project["id"])[0]
+        second_state = create_scene_state(client, project["id"], "Shot 2")
+        asset = upload_character_asset(client, project["id"])
+        create_character_instance(client, project["id"], asset["id"], second_state["id"])
+
+        base_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": base_state["id"]},
+        )
+        second_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": second_state["id"]},
+        )
+
+    assert base_response.json() == []
+    assert len(second_response.json()) == 1
+
+
+def test_deleting_scene_state_deletes_instances_but_not_character_assets() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = create_scene_state(client, project["id"], "Shot 2")
+        asset = upload_character_asset(client, project["id"])
+        model_file = public_path_to_file(asset["model_path"])
+        instance = create_character_instance(client, project["id"], asset["id"], state["id"])
+
+        response = client.delete(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+        )
+        instances_response = client.get(
+            f"/api/projects/{project['id']}/character-instances",
+            params={"scene_state_id": state["id"]},
+        )
+        assets_response = client.get(f"/api/projects/{project['id']}/character-assets")
+
+    assert response.status_code == 200
+    assert instances_response.status_code == 404
+    assert assets_response.status_code == 200
+    assert assets_response.json()[0]["id"] == asset["id"]
+    assert model_file.exists()
+
+
+def test_existing_character_instance_api_still_works_without_scene_state_id() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        base_state = list_scene_states(client, project["id"])[0]
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"])
+        response = client.get(f"/api/projects/{project['id']}/character-instances")
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == instance["id"]
+    assert response.json()[0]["scene_state_id"] == base_state["id"]

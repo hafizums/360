@@ -1,6 +1,6 @@
 # 360 Scene Stager
 
-Personal-use local web app for collecting room references, viewing uploaded 360 equirectangular panoramas, and placing uploaded GLB character models in a simple 3D editor.
+Personal-use local web app for collecting room references, viewing uploaded 360 equirectangular panoramas, placing uploaded GLB character models, and saving multiple scene states for shot planning.
 
 This app intentionally supports manual uploads only. It does not generate panoramas, call AI providers, or use paid APIs.
 
@@ -24,6 +24,7 @@ backend/
     routers/
       characters.py
       projects.py
+      scene_states.py
       uploads.py
   uploads/
   requirements.txt
@@ -98,15 +99,40 @@ VITE_API_URL=http://127.0.0.1:8000
 4. Upload a panorama image using the 360 panorama panel.
 5. The panorama must be a 2:1 equirectangular image, such as `4096x2048` or `2048x1024`.
 6. Upload a `.glb` character model in the Character assets panel.
-7. Click `Add` next to the character asset to place it in the scene.
-8. Select the placed character in the Objects panel or in the 3D viewer.
-9. Use Move, Rotate, and Scale modes to edit the selected character with TransformControls.
-10. Use the inspector to fine tune name, position, rotation, scale, and visibility, then save.
-11. Duplicate an instance to create another placement of the same asset.
-12. Refresh the browser and confirm the placements remain.
-13. Delete one instance and confirm other placements remain.
+7. Add the character to `Base Scene`.
+8. Create a new Scene State or duplicate `Base Scene` to make the next shot.
+9. Move the character differently in the new state.
+10. Switch between scene states and confirm the object list and viewer placements change.
+11. Refresh the browser and confirm scene states and placements persist.
+12. Delete one scene state and confirm character asset files remain.
 
-Refreshing the browser keeps project metadata, uploaded image paths, character assets, and character placements because they are stored in SQLite.
+## Scene States / Shot States
+
+Each project always has at least one scene state named `Base Scene`. A scene state stores its own character placements, including position, rotation, scale, visibility, and instance names.
+
+Use scene states for shot or beat variations:
+
+- Shot 1: character standing near the sofa.
+- Shot 2: the same character moved near the table.
+- Shot 3: two characters visible in different positions.
+- Shot 4: one character hidden while another remains visible.
+
+Duplicating a scene state copies all character placements into a new state named `{original name} Copy`. This is the fastest way to create the next shot while preserving the previous arrangement.
+
+Deleting a scene state deletes only the character instances in that state. It does not delete character assets or GLB model files. Deleting the last scene state is blocked.
+
+## Character Placement
+
+1. Upload a `.glb` character model.
+2. Click `Add` next to the character asset to place it in the selected scene state.
+3. Select the placed character in the Objects panel or in the 3D viewer.
+4. Use Move, Rotate, and Scale modes to edit the selected character with TransformControls.
+5. Use the inspector to fine tune name, position, rotation, scale, and visibility, then save.
+6. Duplicate an instance to create another placement of the same asset.
+7. Refresh the browser and confirm the placements remain.
+8. Delete one instance and confirm other placements remain.
+
+Refreshing the browser keeps project metadata, uploaded image paths, character assets, scene states, and character placements because they are stored in SQLite.
 
 ## Coordinate Convention
 
@@ -124,6 +150,12 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 - `PATCH /api/projects/{project_id}`
 - `POST /api/projects/{project_id}/upload-source`
 - `POST /api/projects/{project_id}/upload-panorama`
+- `GET /api/projects/{project_id}/scene-states`
+- `POST /api/projects/{project_id}/scene-states`
+- `GET /api/projects/{project_id}/scene-states/{scene_state_id}`
+- `PATCH /api/projects/{project_id}/scene-states/{scene_state_id}`
+- `DELETE /api/projects/{project_id}/scene-states/{scene_state_id}`
+- `POST /api/projects/{project_id}/scene-states/{scene_state_id}/duplicate`
 - `GET /api/projects/{project_id}/character-assets`
 - `POST /api/projects/{project_id}/character-assets/upload`
 - `DELETE /api/projects/{project_id}/character-assets/{asset_id}`
@@ -135,7 +167,9 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 
 `PATCH /api/projects/{project_id}` only updates project metadata: `name` and `description`. Direct editing of `source_image_path` and `panorama_image_path` is intentionally blocked so uploaded files remain managed by the upload endpoints, including validation and old-file cleanup.
 
-Deleting a character asset is blocked while any character instances still use it. Deleting an unused asset removes its GLB file only when that file is safely inside the current project's `models` upload folder.
+`GET /api/projects/{project_id}/character-instances` accepts an optional `scene_state_id` query parameter. If omitted, the backend uses the project's first/default scene state. Creating an instance also accepts optional `scene_state_id`.
+
+Deleting a character asset is blocked while any character instances in any scene state still use it. Deleting an unused asset removes its GLB file only when that file is safely inside the current project's `models` upload folder.
 
 ## Tests
 
@@ -159,7 +193,6 @@ npm run build
 
 The current app keeps project metadata and upload workflows separate from the viewer component so later modules can be added without replacing the foundation:
 
-- Scene states
 - Shot planner
 - Prompt export
 - Provider adapters

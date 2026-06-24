@@ -23,6 +23,7 @@ export type CharacterAsset = {
 export type CharacterInstance = {
   id: number;
   project_id: number;
+  scene_state_id: number;
   character_asset_id: number;
   name: string;
   position_x: number;
@@ -37,7 +38,22 @@ export type CharacterInstance = {
   updated_at: string;
 };
 
+export type SceneState = {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
 type ProjectPayload = {
+  name: string;
+  description: string;
+};
+
+export type SceneStatePayload = {
   name: string;
   description: string;
 };
@@ -107,12 +123,23 @@ export const api = {
     request<{ deleted: boolean }>(`/api/projects/${projectId}/character-assets/${assetId}`, {
       method: "DELETE",
     }),
-  listCharacterInstances: (projectId: number) =>
-    request<CharacterInstance[]>(`/api/projects/${projectId}/character-instances`),
-  createCharacterInstance: (projectId: number, characterAssetId: number) =>
+  listCharacterInstances: (projectId: number, sceneStateId?: number) => {
+    const query = sceneStateId ? `?scene_state_id=${sceneStateId}` : "";
+    return request<CharacterInstance[]>(
+      `/api/projects/${projectId}/character-instances${query}`,
+    );
+  },
+  createCharacterInstance: (
+    projectId: number,
+    characterAssetId: number,
+    sceneStateId?: number,
+  ) =>
     request<CharacterInstance>(`/api/projects/${projectId}/character-instances`, {
       method: "POST",
-      body: JSON.stringify({ character_asset_id: characterAssetId }),
+      body: JSON.stringify({
+        character_asset_id: characterAssetId,
+        ...(sceneStateId ? { scene_state_id: sceneStateId } : {}),
+      }),
     }),
   updateCharacterInstance: (
     projectId: number,
@@ -136,6 +163,30 @@ export const api = {
       `/api/projects/${projectId}/character-instances/${instanceId}/duplicate`,
       { method: "POST" },
     ),
+  listSceneStates: (projectId: number) =>
+    request<SceneState[]>(`/api/projects/${projectId}/scene-states`),
+  createSceneState: (projectId: number, payload: SceneStatePayload) =>
+    request<SceneState>(`/api/projects/${projectId}/scene-states`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateSceneState: (
+    projectId: number,
+    sceneStateId: number,
+    payload: Partial<SceneStatePayload>,
+  ) =>
+    request<SceneState>(`/api/projects/${projectId}/scene-states/${sceneStateId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteSceneState: (projectId: number, sceneStateId: number) =>
+    request<{ deleted: boolean }>(`/api/projects/${projectId}/scene-states/${sceneStateId}`, {
+      method: "DELETE",
+    }),
+  duplicateSceneState: (projectId: number, sceneStateId: number) =>
+    request<SceneState>(`/api/projects/${projectId}/scene-states/${sceneStateId}/duplicate`, {
+      method: "POST",
+    }),
 };
 
 async function uploadImage(id: number, endpoint: string, file: File): Promise<Project> {

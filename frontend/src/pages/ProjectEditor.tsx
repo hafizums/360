@@ -7,6 +7,7 @@ import {
   CharacterInstance,
   CharacterInstanceUpdate,
   Project,
+  SceneState,
 } from "../api";
 import PanoramaViewer, { TransformMode } from "../components/PanoramaViewer";
 import UploadPanel from "../components/UploadPanel";
@@ -19,14 +20,19 @@ export default function ProjectEditor() {
   const projectId = Number(params.projectId);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [sceneStates, setSceneStates] = useState<SceneState[]>([]);
+  const [selectedSceneStateId, setSelectedSceneStateId] = useState<number | null>(null);
   const [assets, setAssets] = useState<CharacterAsset[]>([]);
   const [instances, setInstances] = useState<CharacterInstance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sceneSaving, setSceneSaving] = useState(false);
   const [assetBusy, setAssetBusy] = useState(false);
+  const [panelsCollapsed, setPanelsCollapsed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sceneError, setSceneError] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
   const [instanceError, setInstanceError] = useState<string | null>(null);
 
@@ -37,23 +43,37 @@ export default function ProjectEditor() {
       return;
     }
 
-    Promise.all([
-      api.getProject(projectId),
-      api.listCharacterAssets(projectId),
-      api.listCharacterInstances(projectId),
-    ])
-      .then(([loadedProject, loadedAssets, loadedInstances]) => {
+    async function loadEditor() {
+      try {
+        const [loadedProject, loadedAssets, loadedSceneStates] = await Promise.all([
+          api.getProject(projectId),
+          api.listCharacterAssets(projectId),
+          api.listSceneStates(projectId),
+        ]);
+        const selectedSceneState = loadedSceneStates[0] ?? null;
+        const loadedInstances = selectedSceneState
+          ? await api.listCharacterInstances(projectId, selectedSceneState.id)
+          : [];
         setProject(loadedProject);
         setAssets(loadedAssets);
+        setSceneStates(loadedSceneStates);
+        setSelectedSceneStateId(selectedSceneState?.id ?? null);
         setInstances(loadedInstances);
         setSelectedInstanceId(loadedInstances[0]?.id ?? null);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not load project.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void loadEditor();
   }, [projectId]);
 
   const selectedInstance =
     instances.find((instance) => instance.id === selectedInstanceId) ?? null;
+  const selectedSceneState =
+    sceneStates.find((state) => state.id === selectedSceneStateId) ?? null;
 
   if (loading) {
     return (
@@ -101,6 +121,119 @@ export default function ProjectEditor() {
     }
   }
 
+  async function loadInstancesForScene(sceneStateId: number) {
+    setInstanceError(null);
+    const loadedInstances = await api.listCharacterInstances(activeProject.id, sceneStateId);
+    setInstances(loadedInstances);
+    setSelectedInstanceId((current) =>
+      loadedInstances.some((instance) => instance.id === current)
+        ? current
+        : (loadedInstances[0]?.id ?? null),
+    );
+  }
+
+  async function selectSceneState(sceneStateId: number) {
+    setSelectedSceneStateId(sceneStateId);
+    try {
+      await loadInstancesForScene(sceneStateId);
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not load scene state.");
+    }
+  }
+
+  function mergeSceneState(sceneStateId: number, patch: Partial<SceneState>) {
+    setSceneStates((current) =>
+      current.map((state) => (state.id === sceneStateId ? { ...state, ...patch } : state)),
+    );
+  }
+
+  async function createSceneState() {
+    setSceneSaving(true);
+    setSceneError(null);
+    try {
+      const state = await api.createSceneState(activeProject.id, {
+        name: `Scene ${sceneStates.length + 1}`,
+        description: "",
+      });
+      setSceneStates((current) => [...current, state]);
+      setSelectedSceneStateId(state.id);
+      setInstances([]);
+      setSelectedInstanceId(null);
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not create scene state.");
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
+  async function saveSelectedSceneState() {
+    if (!selectedSceneState) {
+      return;
+    }
+
+    setSceneSaving(true);
+    setSceneError(null);
+    try {
+      const updated = await api.updateSceneState(activeProject.id, selectedSceneState.id, {
+        name: selectedSceneState.name,
+        description: selectedSceneState.description,
+      });
+      setSceneStates((current) =>
+        current.map((state) => (state.id === updated.id ? updated : state)),
+      );
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not save scene state.");
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
+  async function duplicateSelectedSceneState() {
+    if (!selectedSceneState) {
+      return;
+    }
+
+    setSceneSaving(true);
+    setSceneError(null);
+    try {
+      const duplicated = await api.duplicateSceneState(activeProject.id, selectedSceneState.id);
+      const loadedSceneStates = await api.listSceneStates(activeProject.id);
+      setSceneStates(loadedSceneStates);
+      setSelectedSceneStateId(duplicated.id);
+      await loadInstancesForScene(duplicated.id);
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not duplicate scene state.");
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
+  async function deleteSelectedSceneState() {
+    if (!selectedSceneState) {
+      return;
+    }
+
+    setSceneSaving(true);
+    setSceneError(null);
+    try {
+      await api.deleteSceneState(activeProject.id, selectedSceneState.id);
+      const remaining = sceneStates.filter((state) => state.id !== selectedSceneState.id);
+      setSceneStates(remaining);
+      const nextState = remaining[0] ?? null;
+      setSelectedSceneStateId(nextState?.id ?? null);
+      if (nextState) {
+        await loadInstancesForScene(nextState.id);
+      } else {
+        setInstances([]);
+        setSelectedInstanceId(null);
+      }
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not delete scene state.");
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
   async function handleModelUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) {
@@ -123,7 +256,11 @@ export default function ProjectEditor() {
   async function addInstance(assetId: number) {
     setInstanceError(null);
     try {
-      const instance = await api.createCharacterInstance(activeProject.id, assetId);
+      const instance = await api.createCharacterInstance(
+        activeProject.id,
+        assetId,
+        selectedSceneStateId ?? undefined,
+      );
       setInstances((current) => [instance, ...current]);
       setSelectedInstanceId(instance.id);
     } catch (err) {
@@ -167,7 +304,7 @@ export default function ProjectEditor() {
   }
 
   return (
-    <main className="editor-shell">
+    <main className={panelsCollapsed ? "editor-shell panels-collapsed" : "editor-shell"}>
       <aside className="sidebar">
         <Link className="back-link" to="/">
           Back to projects
@@ -196,6 +333,80 @@ export default function ProjectEditor() {
           onUploaded={setProject}
           validateFile={validatePanoramaAspectRatio}
         />
+
+        <section className="panel scene-panel">
+          <div className="panel-heading">
+            <h2>Scene states</h2>
+            <span>{instances.length} objects</span>
+          </div>
+          <div className="scene-list">
+            {sceneStates.map((state) => (
+              <button
+                className={
+                  state.id === selectedSceneStateId ? "scene-row selected" : "scene-row"
+                }
+                key={state.id}
+                type="button"
+                onClick={() => void selectSceneState(state.id)}
+              >
+                <span>{state.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="row-actions full-width">
+            <button type="button" disabled={sceneSaving} onClick={() => void createSceneState()}>
+              New
+            </button>
+            <button
+              type="button"
+              disabled={sceneSaving || !selectedSceneState}
+              onClick={() => void duplicateSelectedSceneState()}
+            >
+              Duplicate
+            </button>
+            <button
+              type="button"
+              disabled={sceneSaving || !selectedSceneState}
+              onClick={() => void deleteSelectedSceneState()}
+            >
+              Delete
+            </button>
+          </div>
+          {selectedSceneState ? (
+            <>
+              <label>
+                State name
+                <input
+                  value={selectedSceneState.name}
+                  onChange={(event) =>
+                    mergeSceneState(selectedSceneState.id, { name: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Description
+                <textarea
+                  rows={3}
+                  value={selectedSceneState.description}
+                  onChange={(event) =>
+                    mergeSceneState(selectedSceneState.id, {
+                      description: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={sceneSaving}
+                onClick={() => void saveSelectedSceneState()}
+              >
+                {sceneSaving ? "Saving..." : "Save state"}
+              </button>
+            </>
+          ) : null}
+          {sceneError ? <p className="error-text">{sceneError}</p> : null}
+        </section>
 
         <section className="panel character-panel">
           <div className="panel-heading">
@@ -384,6 +595,13 @@ export default function ProjectEditor() {
             <h2>{panoramaUrl ? "360 environment" : "Waiting for panorama"}</h2>
           </div>
           <div className="mode-group" aria-label="Transform mode">
+            <button
+              className={panelsCollapsed ? "active" : ""}
+              type="button"
+              onClick={() => setPanelsCollapsed((collapsed) => !collapsed)}
+            >
+              Panels
+            </button>
             <button
               className={transformMode === "translate" ? "active" : ""}
               type="button"

@@ -60,6 +60,12 @@ function CharacterModel({
       return null;
     }
 
+    const uniformScale = Math.max(
+      0.01,
+      (Math.abs(group.scale.x) + Math.abs(group.scale.y) + Math.abs(group.scale.z)) / 3,
+    );
+    group.scale.setScalar(uniformScale);
+
     return {
       position_x: group.position.x,
       position_y: group.position.y,
@@ -67,7 +73,7 @@ function CharacterModel({
       rotation_x: group.rotation.x,
       rotation_y: group.rotation.y,
       rotation_z: group.rotation.z,
-      scale: group.scale.x,
+      scale: uniformScale,
     };
   }
 

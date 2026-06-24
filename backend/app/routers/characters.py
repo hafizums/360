@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.config import get_max_model_bytes, get_upload_dir
-from app.database import db_session
+from app.database import db_session, get_default_scene_state_id
 from app.models import character_asset_from_row, character_instance_from_row
 from app.routers.uploads import format_upload_size
 from app.schemas import (
@@ -55,6 +55,26 @@ def get_instance_or_404(project_id: int, instance_id: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="Character instance not found")
     return character_instance_from_row(row)
+
+
+def get_scene_state_id_or_default(project_id: int, scene_state_id: int | None) -> int:
+    with db_session() as conn:
+        if scene_state_id is None:
+            default_id = get_default_scene_state_id(conn, project_id)
+            if default_id is None:
+                raise HTTPException(status_code=404, detail="Scene state not found")
+            return default_id
+
+        row = conn.execute(
+            """
+            SELECT id FROM scene_states
+            WHERE id = ? AND project_id = ?
+            """,
+            (scene_state_id, project_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Scene state not found")
+    return scene_state_id
 
 
 def save_glb_model(project_id: int, file: UploadFile) -> Path:
@@ -180,16 +200,20 @@ def delete_character_asset(project_id: int, asset_id: int) -> dict[str, bool]:
 
 
 @router.get("/character-instances", response_model=list[CharacterInstance])
-def list_character_instances(project_id: int) -> list[dict]:
+def list_character_instances(
+    project_id: int,
+    scene_state_id: int | None = Query(default=None),
+) -> list[dict]:
     ensure_project_exists(project_id)
+    resolved_scene_state_id = get_scene_state_id_or_default(project_id, scene_state_id)
     with db_session() as conn:
         rows = conn.execute(
             """
             SELECT * FROM character_instances
-            WHERE project_id = ?
+            WHERE project_id = ? AND scene_state_id = ?
             ORDER BY updated_at DESC, id DESC
             """,
-            (project_id,),
+            (project_id, resolved_scene_state_id),
         ).fetchall()
     return [character_instance_from_row(row) for row in rows]
 
@@ -197,15 +221,16 @@ def list_character_instances(project_id: int) -> list[dict]:
 @router.post("/character-instances", response_model=CharacterInstance, status_code=201)
 def create_character_instance(project_id: int, payload: CharacterInstanceCreate) -> dict:
     asset = get_asset_or_404(project_id, payload.character_asset_id)
+    scene_state_id = get_scene_state_id_or_default(project_id, payload.scene_state_id)
     instance_name = payload.name or asset["name"]
 
     with db_session() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO character_instances (project_id, character_asset_id, name)
-            VALUES (?, ?, ?)
+            INSERT INTO character_instances (project_id, scene_state_id, character_asset_id, name)
+            VALUES (?, ?, ?, ?)
             """,
-            (project_id, payload.character_asset_id, instance_name),
+            (project_id, scene_state_id, payload.character_asset_id, instance_name),
         )
         row = conn.execute(
             "SELECT * FROM character_instances WHERE id = ?",
@@ -294,6 +319,7 @@ def duplicate_character_instance(project_id: int, instance_id: int) -> dict:
             """
             INSERT INTO character_instances (
                 project_id,
+                scene_state_id,
                 character_asset_id,
                 name,
                 position_x,
@@ -305,10 +331,11 @@ def duplicate_character_instance(project_id: int, instance_id: int) -> dict:
                 scale,
                 visible
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
+                instance["scene_state_id"],
                 instance["character_asset_id"],
                 f"{instance['name']} Copy",
                 instance["position_x"] + 0.5,

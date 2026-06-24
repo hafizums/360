@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.database import db_session
+from app.database import db_session, get_default_scene_state_id
 from app.models import project_from_row
 from app.schemas import Project, ProjectCreate, ProjectUpdate
 
@@ -25,6 +25,7 @@ def create_project(payload: ProjectCreate) -> dict:
             "INSERT INTO projects (name, description) VALUES (?, ?)",
             (payload.name, payload.description.strip()),
         )
+        get_default_scene_state_id(conn, cursor.lastrowid)
         row = conn.execute(
             "SELECT * FROM projects WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
