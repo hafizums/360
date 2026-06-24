@@ -6,6 +6,7 @@ type UploadPanelProps = {
   helperText: string;
   buttonText: string;
   currentPath: string | null;
+  accept?: string;
   onUpload: (file: File) => Promise<Project>;
   onUploaded: (project: Project) => void;
   validateFile?: (file: File) => Promise<string | null>;
@@ -16,6 +17,7 @@ export default function UploadPanel({
   helperText,
   buttonText,
   currentPath,
+  accept = "image/png,image/jpeg,image/webp",
   onUpload,
   onUploaded,
   validateFile,
@@ -60,7 +62,7 @@ export default function UploadPanel({
       <input
         ref={inputRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept={accept}
         onChange={handleFileChange}
         hidden
       />

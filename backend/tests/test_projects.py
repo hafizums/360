@@ -11,6 +11,7 @@ TEST_ROOT = Path(os.environ["SCENE_STAGER_TEST_ROOT"])
 os.environ["SCENE_STAGER_DB_PATH"] = str(TEST_ROOT / "test.db")
 os.environ["SCENE_STAGER_UPLOAD_DIR"] = str(TEST_ROOT / "uploads")
 os.environ["SCENE_STAGER_MAX_UPLOAD_BYTES"] = str(25 * 1024 * 1024)
+os.environ["SCENE_STAGER_MAX_MODEL_BYTES"] = str(100 * 1024 * 1024)
 os.environ["SCENE_STAGER_MAX_IMAGE_PIXELS"] = str(50_000_000)
 os.environ["SCENE_STAGER_MAX_IMAGE_DIMENSION"] = str(12_000)
 
@@ -60,6 +61,30 @@ def upload_source(client: TestClient, project_id: int, image: BytesIO | None = N
         files={"file": ("source.png", image or make_image(), "image/png")},
     )
     assert response.status_code == 200
+    return response.json()
+
+
+def make_glb(payload: bytes = b"scene-stager") -> BytesIO:
+    buffer = BytesIO(b"glTF" + payload)
+    buffer.seek(0)
+    return buffer
+
+
+def upload_character_asset(client: TestClient, project_id: int, name: str = "hero.glb") -> dict:
+    response = client.post(
+        f"/api/projects/{project_id}/character-assets/upload",
+        files={"file": (name, make_glb(), "model/gltf-binary")},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def create_character_instance(client: TestClient, project_id: int, asset_id: int) -> dict:
+    response = client.post(
+        f"/api/projects/{project_id}/character-instances",
+        json={"character_asset_id": asset_id},
+    )
+    assert response.status_code == 201
     return response.json()
 
 
@@ -273,3 +298,178 @@ def test_replacing_source_image_removes_previous_uploaded_source_file() -> None:
     assert not first_file.exists()
     assert second_file.exists()
     assert first["source_image_path"] != second["source_image_path"]
+
+
+def test_upload_valid_glb_asset() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={"file": ("hero.glb", make_glb(), "model/gltf-binary")},
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["name"] == "hero"
+    assert payload["model_path"].startswith(f"/uploads/project_{project['id']}/models/")
+    assert public_path_to_file(payload["model_path"]).exists()
+
+
+def test_reject_non_glb_extension() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={"file": ("hero.obj", make_glb(), "text/plain")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unsupported model type. Use GLB."
+
+
+def test_reject_fake_glb_magic_header() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={"file": ("hero.glb", BytesIO(b"nope"), "model/gltf-binary")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded model is not a valid GLB file."
+
+
+def test_list_character_assets() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        response = client.get(f"/api/projects/{project['id']}/character-assets")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [asset["id"]]
+
+
+def test_create_character_instance() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        response = client.post(
+            f"/api/projects/{project['id']}/character-instances",
+            json={"character_asset_id": asset["id"]},
+        )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["character_asset_id"] == asset["id"]
+    assert payload["position_x"] == 0
+    assert payload["position_y"] == 0
+    assert payload["position_z"] == -2
+    assert payload["scale"] == 1
+    assert payload["visible"] is True
+
+
+def test_update_character_instance_transform() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"])
+        response = client.patch(
+            f"/api/projects/{project['id']}/character-instances/{instance['id']}",
+            json={
+                "name": "Hero A",
+                "position_x": 1.25,
+                "position_y": 0.5,
+                "position_z": -3.5,
+                "rotation_x": 0.1,
+                "rotation_y": 0.2,
+                "rotation_z": 0.3,
+                "scale": 1.4,
+                "visible": False,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "Hero A"
+    assert payload["position_x"] == 1.25
+    assert payload["position_y"] == 0.5
+    assert payload["position_z"] == -3.5
+    assert payload["rotation_x"] == 0.1
+    assert payload["rotation_y"] == 0.2
+    assert payload["rotation_z"] == 0.3
+    assert payload["scale"] == 1.4
+    assert payload["visible"] is False
+
+
+def test_duplicate_character_instance() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"])
+        response = client.post(
+            f"/api/projects/{project['id']}/character-instances/{instance['id']}/duplicate",
+        )
+
+    assert response.status_code == 201
+    duplicate = response.json()
+    assert duplicate["id"] != instance["id"]
+    assert duplicate["character_asset_id"] == instance["character_asset_id"]
+    assert duplicate["position_x"] == instance["position_x"] + 0.5
+
+
+def test_delete_character_instance() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"])
+        delete_response = client.delete(
+            f"/api/projects/{project['id']}/character-instances/{instance['id']}",
+        )
+        list_response = client.get(f"/api/projects/{project['id']}/character-instances")
+
+    assert delete_response.status_code == 200
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+
+def test_block_deleting_asset_while_in_use() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        create_character_instance(client, project["id"], asset["id"])
+        response = client.delete(
+            f"/api/projects/{project['id']}/character-assets/{asset['id']}",
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Cannot delete a character asset while instances still use it."
+    )
+    assert public_path_to_file(asset["model_path"]).exists()
+
+
+def test_delete_unused_asset_removes_model_file_safely() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        asset = upload_character_asset(client, project["id"])
+        model_file = public_path_to_file(asset["model_path"])
+        assert model_file.exists()
+
+        response = client.delete(
+            f"/api/projects/{project['id']}/character-assets/{asset['id']}",
+        )
+        list_response = client.get(f"/api/projects/{project['id']}/character-assets")
+
+    assert response.status_code == 200
+    assert list_response.json() == []
+    assert not model_file.exists()

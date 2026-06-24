@@ -302,6 +302,111 @@ textarea:focus {
   gap: 12px;
 }
 
+.character-panel,
+.inspector-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.asset-list,
+.object-list {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-row,
+.object-row {
+  background: #171713;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #fffaf0;
+  min-width: 0;
+  padding: 10px;
+}
+
+.asset-row {
+  display: grid;
+  gap: 10px;
+}
+
+.asset-row h3 {
+  font-size: 0.9rem;
+}
+
+.asset-row p {
+  color: #aaa394;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.object-row {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+}
+
+.object-row span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-row span:last-child {
+  color: #aaa394;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.object-row.selected {
+  border-color: #f4b860;
+  box-shadow: 0 0 0 2px rgba(244, 184, 96, 0.12);
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.row-actions.full-width {
+  align-items: center;
+}
+
+.row-actions button,
+.mode-group button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #fffaf0;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.inline-check {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.inline-check input {
+  width: auto;
+}
+
+.field-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .file-path {
   color: #c6bea9;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
@@ -331,6 +436,16 @@ textarea:focus {
   justify-content: space-between;
   min-height: 78px;
   padding: 15px 18px;
+}
+
+.mode-group {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-group button.active {
+  background: #f4b860;
+  color: #17120a;
 }
 
 .viewer-toolbar h2 {
