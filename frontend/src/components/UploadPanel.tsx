@@ -8,6 +8,7 @@ type UploadPanelProps = {
   currentPath: string | null;
   onUpload: (file: File) => Promise<Project>;
   onUploaded: (project: Project) => void;
+  validateFile?: (file: File) => Promise<string | null>;
 };
 
 export default function UploadPanel({
@@ -17,10 +18,12 @@ export default function UploadPanel({
   currentPath,
   onUpload,
   onUploaded,
+  validateFile,
 }: UploadPanelProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -30,7 +33,11 @@ export default function UploadPanel({
 
     setBusy(true);
     setError(null);
+    setWarning(null);
     try {
+      if (validateFile) {
+        setWarning(await validateFile(file));
+      }
       const project = await onUpload(file);
       onUploaded(project);
     } catch (err) {
@@ -66,6 +73,7 @@ export default function UploadPanel({
         {busy ? "Uploading..." : buttonText}
       </button>
       {currentPath ? <p className="file-path">{currentPath}</p> : null}
+      {warning ? <p className="warning-text">{warning}</p> : null}
       {error ? <p className="error-text">{error}</p> : null}
     </section>
   );

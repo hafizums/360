@@ -27,7 +27,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || "Request failed");
+    throw new Error(formatApiError(error.detail || "Request failed"));
   }
 
   return response.json() as Promise<T>;
@@ -71,8 +71,30 @@ async function uploadImage(id: number, endpoint: string, file: File): Promise<Pr
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || "Upload failed");
+    throw new Error(formatApiError(error.detail || "Upload failed"));
   }
 
   return response.json() as Promise<Project>;
+}
+
+function formatApiError(detail: unknown): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object" && "msg" in item) {
+          return String(item.msg).replace(/^Value error,\s*/i, "");
+        }
+        return "Request failed";
+      })
+      .join(" ");
+  }
+
+  return "Request failed";
 }

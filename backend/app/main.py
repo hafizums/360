@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import BASE_DIR, init_db
+from app.config import get_upload_dir
+from app.database import init_db
 from app.routers import projects, uploads
 
 app = FastAPI(title="360 Scene Stager API")
@@ -22,8 +23,8 @@ app.add_middleware(
 
 init_db()
 
-uploads_dir = BASE_DIR / "uploads"
-uploads_dir.mkdir(exist_ok=True)
+uploads_dir = get_upload_dir()
+uploads_dir.mkdir(parents=True, exist_ok=True)
 
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.include_router(projects.router)

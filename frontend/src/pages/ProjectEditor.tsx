@@ -75,6 +75,7 @@ export default function ProjectEditor() {
           currentPath={project.panorama_image_path}
           onUpload={(file) => api.uploadPanorama(project.id, file)}
           onUploaded={setProject}
+          validateFile={validatePanoramaAspectRatio}
         />
 
         {sourceUrl ? (
@@ -99,4 +100,37 @@ export default function ProjectEditor() {
       </section>
     </main>
   );
+}
+
+async function validatePanoramaAspectRatio(file: File): Promise<string | null> {
+  const dimensions = await readImageDimensions(file);
+  if (!dimensions) {
+    return null;
+  }
+
+  const ratio = dimensions.width / dimensions.height;
+  if (Math.abs(ratio - 2) > 0.02) {
+    return `This image is ${dimensions.width}x${dimensions.height}, not close to the required 2:1 panorama ratio.`;
+  }
+
+  return null;
+}
+
+function readImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+
+    image.src = url;
+  });
 }

@@ -58,6 +58,16 @@ SQLite data is stored in `backend/scene_stager.db`.
 
 Uploaded files are stored under `backend/uploads/project_<id>/` and are served from `http://127.0.0.1:8000/uploads/...`.
 
+Uploads are local-only and limited by default to 25 MB per file. Supported image extensions are `jpg`, `jpeg`, `png`, and `webp`. Images are validated with Pillow, and panoramas must be 2:1 equirectangular images. Very large images are rejected before they can exhaust memory; by default, images are limited to 12,000 pixels on either side and 50,000,000 total pixels.
+
+You can override upload limits for local development or tests with environment variables:
+
+```powershell
+$env:SCENE_STAGER_MAX_UPLOAD_BYTES="26214400"
+$env:SCENE_STAGER_MAX_IMAGE_DIMENSION="12000"
+$env:SCENE_STAGER_MAX_IMAGE_PIXELS="50000000"
+```
+
 ## Frontend Setup
 
 Open a second terminal from the repository root:
@@ -96,6 +106,26 @@ Refreshing the browser keeps project metadata and uploaded image paths because t
 - `PATCH /api/projects/{project_id}`
 - `POST /api/projects/{project_id}/upload-source`
 - `POST /api/projects/{project_id}/upload-panorama`
+
+`PATCH /api/projects/{project_id}` only updates project metadata: `name` and `description`. Direct editing of `source_image_path` and `panorama_image_path` is intentionally blocked so uploaded files remain managed by the upload endpoints, including validation and old-file cleanup.
+
+## Tests
+
+Backend:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+pytest
+python -m compileall app
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm run build
+```
 
 ## Future Module Boundaries
 

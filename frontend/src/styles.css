@@ -260,6 +260,11 @@ textarea:focus {
   font-size: 0.86rem;
 }
 
+.warning-text {
+  color: #ffd28d;
+  font-size: 0.86rem;
+}
+
 .editor-shell {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);

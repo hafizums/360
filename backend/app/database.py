@@ -1,20 +1,36 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import sqlite3
-from pathlib import Path
+from collections.abc import Iterator
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DB_PATH = BASE_DIR / "scene_stager.db"
+from app.config import get_database_path
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_database_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+@contextmanager
+def db_session() -> Iterator[sqlite3.Connection]:
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
-    with get_connection() as conn:
+    with db_session() as conn:
+        conn.execute("DROP TRIGGER IF EXISTS projects_updated_at")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -26,15 +42,5 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS projects_updated_at
-            AFTER UPDATE ON projects
-            FOR EACH ROW
-            BEGIN
-                UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
-            END
             """
         )
