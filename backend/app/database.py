@@ -95,6 +95,18 @@ def init_db() -> None:
             """
         )
         add_column_if_missing(conn, "character_instances", "scene_state_id", "INTEGER")
+        add_column_if_missing(conn, "scene_states", "shot_number", "INTEGER NOT NULL DEFAULT 1")
+        add_column_if_missing(conn, "scene_states", "shot_size", "TEXT NOT NULL DEFAULT 'WIDE'")
+        add_column_if_missing(conn, "scene_states", "camera_move", "TEXT NOT NULL DEFAULT 'static'")
+        add_column_if_missing(conn, "scene_states", "action_notes", "TEXT NOT NULL DEFAULT ''")
+        add_column_if_missing(conn, "scene_states", "prompt_notes", "TEXT NOT NULL DEFAULT ''")
+        add_column_if_missing(conn, "scene_states", "camera_position_x", "REAL NOT NULL DEFAULT 0")
+        add_column_if_missing(conn, "scene_states", "camera_position_y", "REAL NOT NULL DEFAULT 1.4")
+        add_column_if_missing(conn, "scene_states", "camera_position_z", "REAL NOT NULL DEFAULT 0.2")
+        add_column_if_missing(conn, "scene_states", "camera_target_x", "REAL NOT NULL DEFAULT 0")
+        add_column_if_missing(conn, "scene_states", "camera_target_y", "REAL NOT NULL DEFAULT 1.4")
+        add_column_if_missing(conn, "scene_states", "camera_target_z", "REAL NOT NULL DEFAULT -2")
+        add_column_if_missing(conn, "scene_states", "camera_fov", "REAL NOT NULL DEFAULT 75")
         ensure_default_scene_states(conn)
 
 

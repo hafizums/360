@@ -60,10 +60,44 @@ def create_scene_state(project_id: int, payload: SceneStateCreate) -> dict:
         ).fetchone()["next_sort_order"]
         cursor = conn.execute(
             """
-            INSERT INTO scene_states (project_id, name, description, sort_order)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO scene_states (
+                project_id,
+                name,
+                description,
+                sort_order,
+                shot_number,
+                shot_size,
+                camera_move,
+                action_notes,
+                prompt_notes,
+                camera_position_x,
+                camera_position_y,
+                camera_position_z,
+                camera_target_x,
+                camera_target_y,
+                camera_target_z,
+                camera_fov
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (project_id, payload.name, payload.description.strip(), next_sort_order),
+            (
+                project_id,
+                payload.name,
+                payload.description,
+                next_sort_order,
+                payload.shot_number,
+                payload.shot_size,
+                payload.camera_move,
+                payload.action_notes,
+                payload.prompt_notes,
+                payload.camera_position_x,
+                payload.camera_position_y,
+                payload.camera_position_z,
+                payload.camera_target_x,
+                payload.camera_target_y,
+                payload.camera_target_z,
+                payload.camera_fov,
+            ),
         )
         row = conn.execute(
             "SELECT * FROM scene_states WHERE id = ?",
@@ -85,15 +119,34 @@ def update_scene_state(
 ) -> dict:
     get_scene_state_or_404(project_id, scene_state_id)
     updates = payload.model_dump(exclude_unset=True)
-    fields = [field for field in updates if field in {"name", "description", "sort_order"}]
+    fields = [
+        field
+        for field in updates
+        if field
+        in {
+            "name",
+            "description",
+            "sort_order",
+            "shot_number",
+            "shot_size",
+            "camera_move",
+            "action_notes",
+            "prompt_notes",
+            "camera_position_x",
+            "camera_position_y",
+            "camera_position_z",
+            "camera_target_x",
+            "camera_target_y",
+            "camera_target_z",
+            "camera_fov",
+        }
+    ]
 
     if fields:
         assignments = []
         values = []
         for field in fields:
             value = updates[field]
-            if isinstance(value, str) and field == "description":
-                value = value.strip()
             assignments.append(f"{field} = ?")
             values.append(value)
         assignments.append("updated_at = CURRENT_TIMESTAMP")
@@ -156,14 +209,43 @@ def duplicate_scene_state(project_id: int, scene_state_id: int) -> dict:
         ).fetchone()["next_sort_order"]
         cursor = conn.execute(
             """
-            INSERT INTO scene_states (project_id, name, description, sort_order)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO scene_states (
+                project_id,
+                name,
+                description,
+                sort_order,
+                shot_number,
+                shot_size,
+                camera_move,
+                action_notes,
+                prompt_notes,
+                camera_position_x,
+                camera_position_y,
+                camera_position_z,
+                camera_target_x,
+                camera_target_y,
+                camera_target_z,
+                camera_fov
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
                 f"{original['name']} Copy",
                 original["description"],
                 next_sort_order,
+                original["shot_number"],
+                original["shot_size"],
+                original["camera_move"],
+                original["action_notes"],
+                original["prompt_notes"],
+                original["camera_position_x"],
+                original["camera_position_y"],
+                original["camera_position_z"],
+                original["camera_target_x"],
+                original["camera_target_y"],
+                original["camera_target_z"],
+                original["camera_fov"],
             ),
         )
         new_scene_state_id = cursor.lastrowid

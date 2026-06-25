@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from app.database import db_session
+from app.models import character_asset_from_row, character_instance_from_row, project_from_row, scene_state_from_row
+
+
+def build_character_summary(instances: list[dict]) -> str:
+    if not instances:
+        return "No characters placed."
+    return "; ".join(
+        (
+            f"{instance['name']} ({'visible' if instance['visible'] else 'hidden'}) at "
+            f"({instance['position_x']:.2f}, {instance['position_y']:.2f}, {instance['position_z']:.2f}), "
+            f"rotation ({instance['rotation_x']:.2f}, {instance['rotation_y']:.2f}, {instance['rotation_z']:.2f}) radians, "
+            f"scale {instance['scale']:.2f}"
+        )
+        for instance in instances
+    )
+
+
+def build_prompts(project: dict, scene_state: dict, instances: list[dict]) -> dict[str, str]:
+    character_summary = build_character_summary(instances)
+    image_prompt = (
+        f"Create a cinematic {scene_state['shot_size']} frame inside the provided 360 environment. "
+        f"Project: {project['name']}. Scene state: {scene_state['name']}. "
+        f"Camera: FOV {scene_state['camera_fov']:.1f}. Characters: {character_summary}. "
+        f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
+        f"Style/notes: {scene_state['prompt_notes'] or 'No extra style notes provided.'}. "
+        "Keep character identity and placement consistent with the reference layout."
+    )
+    video_prompt = (
+        "Generate a short cinematic video based on this scene state. "
+        f"Camera move: {scene_state['camera_move']}. Shot size: {scene_state['shot_size']}. "
+        f"Character blocking: {character_summary}. "
+        f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
+        "Preserve the same 360 environment, character positions, scale, and orientation unless the action notes specify movement."
+    )
+    negative_prompt = (
+        "Avoid changing character identity, wardrobe, relative scale, or established placement. "
+        "Avoid adding unlisted characters, changing the room layout, distorting anatomy, or drifting away from the saved camera framing."
+    )
+    return {
+        "image_reference_prompt": image_prompt,
+        "video_prompt": video_prompt,
+        "negative_consistency_prompt": negative_prompt,
+        "character_placement_summary": character_summary,
+    }
+
+
+def build_scene_export(project_id: int, scene_state_id: int) -> dict:
+    with db_session() as conn:
+        project_row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        scene_row = conn.execute(
+            "SELECT * FROM scene_states WHERE id = ? AND project_id = ?",
+            (scene_state_id, project_id),
+        ).fetchone()
+        if project_row is None or scene_row is None:
+            return {}
+
+        instance_rows = conn.execute(
+            """
+            SELECT * FROM character_instances
+            WHERE project_id = ? AND scene_state_id = ?
+            ORDER BY id ASC
+            """,
+            (project_id, scene_state_id),
+        ).fetchall()
+        instances = [character_instance_from_row(row) for row in instance_rows]
+        asset_ids = sorted({instance["character_asset_id"] for instance in instances})
+        if asset_ids:
+            placeholders = ",".join("?" for _ in asset_ids)
+            asset_rows = conn.execute(
+                f"""
+                SELECT * FROM character_assets
+                WHERE project_id = ? AND id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                (project_id, *asset_ids),
+            ).fetchall()
+        else:
+            asset_rows = []
+
+    project = project_from_row(project_row)
+    scene_state = scene_state_from_row(scene_row)
+    assets = [character_asset_from_row(row) for row in asset_rows]
+    prompts = build_prompts(project, scene_state, instances)
+
+    return {
+        "project": project,
+        "panorama_path": project["panorama_image_path"],
+        "source_image_path": project["source_image_path"],
+        "scene_state": scene_state,
+        "camera": {
+            "position": {
+                "x": scene_state["camera_position_x"],
+                "y": scene_state["camera_position_y"],
+                "z": scene_state["camera_position_z"],
+            },
+            "target": {
+                "x": scene_state["camera_target_x"],
+                "y": scene_state["camera_target_y"],
+                "z": scene_state["camera_target_z"],
+            },
+            "fov": scene_state["camera_fov"],
+        },
+        "character_assets": assets,
+        "character_instances": instances,
+        "coordinate_convention": {
+            "up_axis": "y",
+            "floor_y": 0,
+            "rotation_units": "radians",
+            "scale": "uniform scalar",
+        },
+        "prompts": prompts,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def build_project_export(project_id: int) -> dict:
+    with db_session() as conn:
+        project_row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if project_row is None:
+            return {}
+        scene_rows = conn.execute(
+            "SELECT * FROM scene_states WHERE project_id = ? ORDER BY sort_order ASC, id ASC",
+            (project_id,),
+        ).fetchall()
+        asset_rows = conn.execute(
+            "SELECT * FROM character_assets WHERE project_id = ? ORDER BY id ASC",
+            (project_id,),
+        ).fetchall()
+        instance_rows = conn.execute(
+            "SELECT * FROM character_instances WHERE project_id = ? ORDER BY scene_state_id ASC, id ASC",
+            (project_id,),
+        ).fetchall()
+
+    project = project_from_row(project_row)
+    scene_states = [scene_state_from_row(row) for row in scene_rows]
+    assets = [character_asset_from_row(row) for row in asset_rows]
+    instances = [character_instance_from_row(row) for row in instance_rows]
+    prompts_by_scene = []
+    for scene_state in scene_states:
+        scene_instances = [
+            instance for instance in instances if instance["scene_state_id"] == scene_state["id"]
+        ]
+        prompts_by_scene.append(
+            {
+                "scene_state_id": scene_state["id"],
+                "scene_state_name": scene_state["name"],
+                "prompts": build_prompts(project, scene_state, scene_instances),
+            }
+        )
+
+    return {
+        "project": project,
+        "scene_states": scene_states,
+        "character_assets": assets,
+        "character_instances": instances,
+        "prompts_by_scene": prompts_by_scene,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }

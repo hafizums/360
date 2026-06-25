@@ -9,6 +9,9 @@ frontend/*.log
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+frontend/.e2e/
+frontend/test-results/
+frontend/playwright-report/
 .DS_Store
 __pycache__/
 *.pyc

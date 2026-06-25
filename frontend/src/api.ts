@@ -44,8 +44,38 @@ export type SceneState = {
   name: string;
   description: string;
   sort_order: number;
+  shot_number: number;
+  shot_size: ShotSize;
+  camera_move: CameraMove;
+  action_notes: string;
+  prompt_notes: string;
+  camera_position_x: number;
+  camera_position_y: number;
+  camera_position_z: number;
+  camera_target_x: number;
+  camera_target_y: number;
+  camera_target_z: number;
+  camera_fov: number;
   created_at: string;
   updated_at: string;
+};
+
+export type ShotSize = "WIDE" | "MS" | "CU" | "ECU";
+export type CameraMove =
+  | "static"
+  | "push"
+  | "pull"
+  | "pan"
+  | "tilt"
+  | "handheld"
+  | "orbit"
+  | "dolly"
+  | "zoom";
+
+export type CameraSnapshot = {
+  position: { x: number; y: number; z: number };
+  target: { x: number; y: number; z: number };
+  fov: number;
 };
 
 type ProjectPayload = {
@@ -57,6 +87,26 @@ export type SceneStatePayload = {
   name: string;
   description: string;
 };
+
+export type SceneStateUpdate = Partial<
+  Pick<
+    SceneState,
+    | "name"
+    | "description"
+    | "shot_number"
+    | "shot_size"
+    | "camera_move"
+    | "action_notes"
+    | "prompt_notes"
+    | "camera_position_x"
+    | "camera_position_y"
+    | "camera_position_z"
+    | "camera_target_x"
+    | "camera_target_y"
+    | "camera_target_z"
+    | "camera_fov"
+  >
+>;
 
 export type CharacterInstanceUpdate = Partial<
   Pick<
@@ -173,7 +223,7 @@ export const api = {
   updateSceneState: (
     projectId: number,
     sceneStateId: number,
-    payload: Partial<SceneStatePayload>,
+    payload: SceneStateUpdate,
   ) =>
     request<SceneState>(`/api/projects/${projectId}/scene-states/${sceneStateId}`, {
       method: "PATCH",
@@ -187,6 +237,20 @@ export const api = {
     request<SceneState>(`/api/projects/${projectId}/scene-states/${sceneStateId}/duplicate`, {
       method: "POST",
     }),
+  exportSceneJson: (projectId: number, sceneStateId: number) =>
+    request<Record<string, unknown>>(
+      `/api/projects/${projectId}/scene-states/${sceneStateId}/export-json`,
+    ),
+  downloadProjectPackage: async (projectId: number) => {
+    const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/export-package`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(formatApiError(error.detail || "Package export failed."));
+    }
+    return response.blob();
+  },
+  exportProjectPackageUrl: (projectId: number) =>
+    `${API_BASE_URL}/api/projects/${projectId}/export-package`,
 };
 
 async function uploadImage(id: number, endpoint: string, file: File): Promise<Project> {

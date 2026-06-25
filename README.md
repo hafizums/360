@@ -23,6 +23,7 @@ backend/
     schemas.py
     routers/
       characters.py
+      exports.py
       projects.py
       scene_states.py
       uploads.py
@@ -100,15 +101,27 @@ VITE_API_URL=http://127.0.0.1:8000
 5. The panorama must be a 2:1 equirectangular image, such as `4096x2048` or `2048x1024`.
 6. Upload a `.glb` character model in the Character assets panel.
 7. Add the character to `Base Scene`.
-8. Create a new Scene State or duplicate `Base Scene` to make the next shot.
-9. Move the character differently in the new state.
-10. Switch between scene states and confirm the object list and viewer placements change.
-11. Refresh the browser and confirm scene states and placements persist.
-12. Delete one scene state and confirm character asset files remain.
+8. Adjust the camera view and click `Save camera`.
+9. Fill shot number, shot size, camera move, action notes, and prompt notes.
+10. Download a screenshot and scene JSON for the selected state.
+11. Copy the image and video prompts from Prompt export.
+12. Duplicate `Base Scene` to make the next shot.
+13. Move the character differently in the duplicated state and save its camera.
+14. Switch between scene states and confirm the camera, object list, and viewer placements change.
+15. Download the project package ZIP.
+16. Refresh the browser and confirm scene states, shot metadata, camera framing, and placements persist.
 
 ## Scene States / Shot States
 
 Each project always has at least one scene state named `Base Scene`. A scene state stores its own character placements, including position, rotation, scale, visibility, and instance names.
+
+Scene states also store shot planner metadata:
+
+- Shot number.
+- Shot size: `WIDE`, `MS`, `CU`, or `ECU`.
+- Camera move: `static`, `push`, `pull`, `pan`, `tilt`, `handheld`, `orbit`, `dolly`, or `zoom`.
+- Action notes and prompt notes.
+- Saved camera position, OrbitControls target, and field of view.
 
 Use scene states for shot or beat variations:
 
@@ -120,6 +133,27 @@ Use scene states for shot or beat variations:
 Duplicating a scene state copies all character placements into a new state named `{original name} Copy`. This is the fastest way to create the next shot while preserving the previous arrangement.
 
 Deleting a scene state deletes only the character instances in that state. It does not delete character assets or GLB model files. Deleting the last scene state is blocked.
+
+## Camera Save / Restore
+
+The panorama viewer exposes the current camera position, OrbitControls target, and FOV to the editor. Click `Save camera` in the Scene States panel to store the current framing on the selected scene state.
+
+Switching scene states restores that state's saved camera framing. `Reset camera` reloads the currently selected scene state's saved camera values.
+
+## Exports
+
+Screenshot export is browser-local. Click `Download screenshot` to save the current viewer canvas as `project-{projectId}-scene-{sceneStateId}.png`.
+
+Scene JSON export is served by `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`. It includes project metadata, panorama/source paths, selected scene state metadata, saved camera metadata, character assets used by the scene, character instances, coordinate convention, prompts, and a `generated_at` timestamp.
+
+Prompt export is deterministic and local. It does not call an LLM or provider. The panel provides copy buttons for:
+
+- Image reference prompt.
+- Video prompt.
+- Negative / consistency prompt.
+- Character placement summary.
+
+Project package export is served by `GET /api/projects/{project_id}/export-package`. It returns a ZIP containing `project.json`, `scene_states.json`, `character_assets.json`, `character_instances.json`, and `prompts.txt`. Large uploaded image and model binaries are not included yet; the package stores their local/public paths.
 
 ## Character Placement
 
@@ -156,6 +190,8 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 - `PATCH /api/projects/{project_id}/scene-states/{scene_state_id}`
 - `DELETE /api/projects/{project_id}/scene-states/{scene_state_id}`
 - `POST /api/projects/{project_id}/scene-states/{scene_state_id}/duplicate`
+- `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`
+- `GET /api/projects/{project_id}/export-package`
 - `GET /api/projects/{project_id}/character-assets`
 - `POST /api/projects/{project_id}/character-assets/upload`
 - `DELETE /api/projects/{project_id}/character-assets/{asset_id}`
@@ -189,10 +225,40 @@ cd frontend
 npm run build
 ```
 
+End-to-end browser test:
+
+```powershell
+cd frontend
+npm run e2e:install
+npm run e2e
+```
+
+The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server on `127.0.0.1:5174`. It uses isolated local test storage under `frontend/.e2e/`, creates generated image/GLB fixtures at runtime, uploads them through the UI, verifies the 3D canvas can render/export, saves shot metadata/camera state, and checks JSON/ZIP exports.
+
+## Milestone 4 Manual Test
+
+1. Start the backend with `uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`.
+2. Start the frontend with `npm run dev`.
+3. Open `http://127.0.0.1:5173`.
+4. Open an existing project.
+5. Select `Base Scene`.
+6. Upload a panorama and GLB if needed.
+7. Add a character placement.
+8. Adjust the camera view.
+9. Click `Save camera`.
+10. Fill shot number, shot size, camera move, action notes, and prompt notes.
+11. Click `Download screenshot`.
+12. Click `Download scene JSON`.
+13. Copy the image prompt and video prompt.
+14. Duplicate the scene state.
+15. Move the character in the duplicated state.
+16. Save camera for the duplicated state.
+17. Switch between states and confirm camera framing and placements change.
+18. Click `Download project package`.
+19. Run backend tests and the frontend build.
+
 ## Future Module Boundaries
 
 The current app keeps project metadata and upload workflows separate from the viewer component so later modules can be added without replacing the foundation:
 
-- Shot planner
-- Prompt export
 - Provider adapters

@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 os.environ["SCENE_STAGER_TEST_ROOT"] = tempfile.mkdtemp(prefix="scene-stager-tests-")
 TEST_ROOT = Path(os.environ["SCENE_STAGER_TEST_ROOT"])
@@ -708,3 +709,143 @@ def test_existing_character_instance_api_still_works_without_scene_state_id() ->
     assert response.status_code == 200
     assert response.json()[0]["id"] == instance["id"]
     assert response.json()[0]["scene_state_id"] == base_state["id"]
+
+
+def test_scene_state_metadata_update() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={
+                "shot_number": 3,
+                "shot_size": "CU",
+                "camera_move": "push",
+                "action_notes": "Character reaches for the table.",
+                "prompt_notes": "Warm cinematic light.",
+                "camera_position_x": 1.0,
+                "camera_position_y": 1.6,
+                "camera_position_z": 0.4,
+                "camera_target_x": 0.2,
+                "camera_target_y": 1.3,
+                "camera_target_z": -2.4,
+                "camera_fov": 55,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["shot_number"] == 3
+    assert payload["shot_size"] == "CU"
+    assert payload["camera_move"] == "push"
+    assert payload["action_notes"] == "Character reaches for the table."
+    assert payload["prompt_notes"] == "Warm cinematic light."
+    assert payload["camera_position_x"] == 1.0
+    assert payload["camera_fov"] == 55
+
+
+def test_invalid_shot_size_rejected() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"shot_size": "banana"},
+        )
+
+    assert response.status_code == 422
+    assert "Shot size must be one of" in response.text
+
+
+def test_invalid_camera_move_rejected() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"camera_move": "teleport"},
+        )
+
+    assert response.status_code == 422
+    assert "Camera move is not supported" in response.text
+
+
+def test_invalid_camera_fov_rejected() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        low_response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"camera_fov": 10},
+        )
+        high_response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"camera_fov": 130},
+        )
+
+    assert low_response.status_code == 422
+    assert high_response.status_code == 422
+
+
+def test_export_json_contains_project_scene_camera_and_instances() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"], state["id"])
+        client.patch(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}",
+            json={"camera_fov": 64, "shot_size": "MS", "camera_move": "orbit"},
+        )
+        response = client.get(
+            f"/api/projects/{project['id']}/scene-states/{state['id']}/export-json"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project"]["id"] == project["id"]
+    assert payload["scene_state"]["id"] == state["id"]
+    assert payload["camera"]["fov"] == 64
+    assert payload["character_instances"][0]["id"] == instance["id"]
+    assert payload["character_assets"][0]["id"] == asset["id"]
+    assert "image_reference_prompt" in payload["prompts"]
+
+
+def test_project_export_package_returns_zip() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.get(f"/api/projects/{project['id']}/export-package")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert response.content[:2] == b"PK"
+
+
+def test_export_package_contains_expected_files() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        state = list_scene_states(client, project["id"])[0]
+        asset = upload_character_asset(client, project["id"])
+        create_character_instance(client, project["id"], asset["id"], state["id"])
+        response = client.get(f"/api/projects/{project['id']}/export-package")
+
+    with ZipFile(BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        prompts = archive.read("prompts.txt").decode("utf-8")
+
+    assert {
+        "project.json",
+        "scene_states.json",
+        "character_assets.json",
+        "character_instances.json",
+        "prompts.txt",
+    }.issubset(names)
+    assert "Image reference prompt" in prompts
+    assert "Video prompt" in prompts

@@ -1,8 +1,16 @@
 import { OrbitControls, TransformControls, useGLTF } from "@react-three/drei";
-import { Canvas, ThreeEvent, useLoader } from "@react-three/fiber";
-import { Suspense, useMemo, useRef, useState } from "react";
-import { BackSide, Group, TextureLoader, Vector3 } from "three";
-import { CharacterAsset, CharacterInstance, CharacterInstanceUpdate, assetUrl } from "../api";
+import { Canvas, ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
+import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import type { Ref, RefObject } from "react";
+import { BackSide, Group, PerspectiveCamera, TextureLoader } from "three";
+import {
+  CharacterAsset,
+  CharacterInstance,
+  CharacterInstanceUpdate,
+  CameraSnapshot,
+  assetUrl,
+} from "../api";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 export type TransformMode = "translate" | "rotate" | "scale";
 
@@ -15,9 +23,20 @@ type PanoramaViewerProps = {
   onSelectInstance: (instanceId: number) => void;
   onTransformChange: (instanceId: number, patch: CharacterInstanceUpdate) => void;
   onTransformCommit: (instanceId: number, patch: CharacterInstanceUpdate) => void;
+  cameraSnapshot: CameraSnapshot;
+  showGuide: boolean;
+  viewerRef?: Ref<PanoramaViewerHandle>;
 };
 
-const INITIAL_CAMERA = new Vector3(0, 1.4, 0.2);
+export type PanoramaViewerHandle = {
+  getCameraSnapshot: () => CameraSnapshot | null;
+  captureScreenshot: () => string | null;
+};
+
+type ViewerSceneProps = Omit<PanoramaViewerProps, "imageUrl" | "viewerRef"> & {
+  imageUrl: string;
+  controlsRef: RefObject<OrbitControlsImpl>;
+};
 
 function PanoramaSphere({ imageUrl }: { imageUrl: string }) {
   const texture = useLoader(TextureLoader, imageUrl);
@@ -35,6 +54,7 @@ function CharacterModel({
   instance,
   selected,
   transformMode,
+  showGuide,
   onSelectInstance,
   onOrbitEnabledChange,
   onTransformChange,
@@ -44,6 +64,7 @@ function CharacterModel({
   instance: CharacterInstance;
   selected: boolean;
   transformMode: TransformMode;
+  showGuide: boolean;
   onSelectInstance: (instanceId: number) => void;
   onOrbitEnabledChange: (enabled: boolean) => void;
   onTransformChange: (instanceId: number, patch: CharacterInstanceUpdate) => void;
@@ -107,7 +128,7 @@ function CharacterModel({
     </group>
   );
 
-  if (!selected) {
+  if (!selected || !showGuide) {
     return character;
   }
 
@@ -132,8 +153,43 @@ function ViewerScene({
   onSelectInstance,
   onTransformChange,
   onTransformCommit,
-}: Required<Omit<PanoramaViewerProps, "imageUrl">> & { imageUrl: string }) {
+  cameraSnapshot,
+  showGuide,
+  controlsRef,
+}: ViewerSceneProps) {
   const [orbitEnabled, setOrbitEnabled] = useState(true);
+  const { camera } = useThree();
+
+  useEffect(() => {
+    const perspectiveCamera = camera as PerspectiveCamera;
+    perspectiveCamera.position.set(
+      cameraSnapshot.position.x,
+      cameraSnapshot.position.y,
+      cameraSnapshot.position.z,
+    );
+    perspectiveCamera.fov = cameraSnapshot.fov;
+    perspectiveCamera.updateProjectionMatrix();
+    controlsRef.current?.target.set(
+      cameraSnapshot.target.x,
+      cameraSnapshot.target.y,
+      cameraSnapshot.target.z,
+    );
+    controlsRef.current?.update();
+  }, [
+    camera,
+    cameraSnapshot.fov,
+    cameraSnapshot.position.x,
+    cameraSnapshot.position.y,
+    cameraSnapshot.position.z,
+    cameraSnapshot.target.x,
+    cameraSnapshot.target.y,
+    cameraSnapshot.target.z,
+    controlsRef,
+  ]);
+
+  useFrame(() => {
+    controlsRef.current?.update();
+  });
 
   return (
     <>
@@ -154,6 +210,7 @@ function ViewerScene({
                 key={instance.id}
                 selected={instance.id === selectedInstanceId}
                 transformMode={transformMode}
+                showGuide={showGuide}
                 onSelectInstance={onSelectInstance}
                 onOrbitEnabledChange={setOrbitEnabled}
                 onTransformChange={onTransformChange}
@@ -164,8 +221,11 @@ function ViewerScene({
       </Suspense>
       <ambientLight intensity={0.9} />
       <directionalLight intensity={1.1} position={[4, 6, 3]} />
-      <gridHelper args={[16, 16, "#f4b860", "#3a403a"]} position={[0, 0, 0]} />
+      {showGuide ? (
+        <gridHelper args={[16, 16, "#2d8cff", "#363f4c"]} position={[0, 0, 0]} />
+      ) : null}
       <OrbitControls
+        ref={controlsRef}
         enabled={orbitEnabled}
         enableDamping
         enablePan={false}
@@ -186,8 +246,37 @@ export default function PanoramaViewer({
   onSelectInstance,
   onTransformChange,
   onTransformCommit,
+  cameraSnapshot,
+  showGuide,
+  viewerRef,
 }: PanoramaViewerProps) {
   const [viewerKey, setViewerKey] = useState(0);
+  const controlsRef = useRef<OrbitControlsImpl>(null!);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useImperativeHandle(viewerRef, () => ({
+    getCameraSnapshot: () => {
+      const controls = controlsRef.current;
+      if (!controls) {
+        return null;
+      }
+      const camera = controls.object as PerspectiveCamera;
+      return {
+        position: {
+          x: camera.position.x,
+          y: camera.position.y,
+          z: camera.position.z,
+        },
+        target: {
+          x: controls.target.x,
+          y: controls.target.y,
+          z: controls.target.z,
+        },
+        fov: camera.fov,
+      };
+    },
+    captureScreenshot: () => canvasRef.current?.toDataURL("image/png") ?? null,
+  }));
 
   if (!imageUrl) {
     return (
@@ -209,7 +298,21 @@ export default function PanoramaViewer({
       >
         Reset camera
       </button>
-      <Canvas key={viewerKey} camera={{ position: INITIAL_CAMERA.toArray(), fov: 75 }}>
+      <Canvas
+        key={viewerKey}
+        camera={{
+          position: [
+            cameraSnapshot.position.x,
+            cameraSnapshot.position.y,
+            cameraSnapshot.position.z,
+          ],
+          fov: cameraSnapshot.fov,
+        }}
+        gl={{ preserveDrawingBuffer: true }}
+        onCreated={({ gl }) => {
+          canvasRef.current = gl.domElement;
+        }}
+      >
         <ViewerScene
           imageUrl={imageUrl}
           assets={assets}
@@ -219,6 +322,9 @@ export default function PanoramaViewer({
           onSelectInstance={onSelectInstance}
           onTransformChange={onTransformChange}
           onTransformCommit={onTransformCommit}
+          cameraSnapshot={cameraSnapshot}
+          showGuide={showGuide}
+          controlsRef={controlsRef}
         />
       </Canvas>
     </div>
