@@ -29,6 +29,10 @@ def export_project_package(project_id: int) -> Response:
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
         archive.writestr("project.json", json.dumps(payload["project"], indent=2))
+        archive.writestr(
+            "environment_variants.json",
+            json.dumps(payload["environment_variants"], indent=2),
+        )
         archive.writestr("scene_states.json", json.dumps(payload["scene_states"], indent=2))
         archive.writestr(
             "character_assets.json",

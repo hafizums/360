@@ -94,6 +94,29 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS environment_variants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                source_image_path TEXT,
+                panorama_image_path TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',
+                generator TEXT NOT NULL DEFAULT 'manual',
+                source_prompt TEXT NOT NULL DEFAULT '',
+                panorama_prompt TEXT NOT NULL DEFAULT '',
+                negative_prompt TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                width INTEGER NOT NULL DEFAULT 4096,
+                height INTEGER NOT NULL DEFAULT 2048,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )
+            """
+        )
         add_column_if_missing(conn, "character_instances", "scene_state_id", "INTEGER")
         add_column_if_missing(conn, "scene_states", "shot_number", "INTEGER NOT NULL DEFAULT 1")
         add_column_if_missing(conn, "scene_states", "shot_size", "TEXT NOT NULL DEFAULT 'WIDE'")
@@ -108,6 +131,7 @@ def init_db() -> None:
         add_column_if_missing(conn, "scene_states", "camera_target_z", "REAL NOT NULL DEFAULT -2")
         add_column_if_missing(conn, "scene_states", "camera_fov", "REAL NOT NULL DEFAULT 75")
         ensure_default_scene_states(conn)
+        ensure_default_environment_variants(conn)
 
 
 def add_column_if_missing(
@@ -132,6 +156,45 @@ def ensure_default_scene_states(conn: sqlite3.Connection) -> None:
             WHERE project_id = ? AND scene_state_id IS NULL
             """,
             (default_id, project["id"]),
+        )
+
+
+def ensure_default_environment_variants(conn: sqlite3.Connection) -> None:
+    projects = conn.execute(
+        """
+        SELECT id, source_image_path, panorama_image_path
+        FROM projects
+        WHERE source_image_path IS NOT NULL OR panorama_image_path IS NOT NULL
+        """
+    ).fetchall()
+    for project in projects:
+        existing = conn.execute(
+            "SELECT id FROM environment_variants WHERE project_id = ? LIMIT 1",
+            (project["id"],),
+        ).fetchone()
+        if existing is not None:
+            continue
+
+        status = "active" if project["panorama_image_path"] else "draft"
+        conn.execute(
+            """
+            INSERT INTO environment_variants (
+                project_id,
+                name,
+                source_image_path,
+                panorama_image_path,
+                status,
+                is_active
+            )
+            VALUES (?, 'Base Environment', ?, ?, ?, ?)
+            """,
+            (
+                project["id"],
+                project["source_image_path"],
+                project["panorama_image_path"],
+                status,
+                1 if project["panorama_image_path"] else 0,
+            ),
         )
 
 

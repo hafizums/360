@@ -60,6 +60,39 @@ export type SceneState = {
   updated_at: string;
 };
 
+export type EnvironmentStatus =
+  | "draft"
+  | "prompt_ready"
+  | "panorama_uploaded"
+  | "active"
+  | "archived";
+
+export type EnvironmentVariant = {
+  id: number;
+  project_id: number;
+  name: string;
+  source_image_path: string | null;
+  panorama_image_path: string | null;
+  status: EnvironmentStatus;
+  generator: string;
+  source_prompt: string;
+  panorama_prompt: string;
+  negative_prompt: string;
+  notes: string;
+  width: number;
+  height: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnvironmentPromptBundle = {
+  source_analysis_checklist: string;
+  panorama_prompt: string;
+  negative_prompt: string;
+  manual_instructions: string;
+};
+
 export type ShotSize = "WIDE" | "MS" | "CU" | "ECU";
 export type CameraMove =
   | "static"
@@ -87,6 +120,28 @@ export type SceneStatePayload = {
   name: string;
   description: string;
 };
+
+export type EnvironmentVariantPayload = {
+  name: string;
+  notes?: string;
+  width?: number;
+  height?: number;
+};
+
+export type EnvironmentVariantUpdate = Partial<
+  Pick<
+    EnvironmentVariant,
+    | "name"
+    | "status"
+    | "generator"
+    | "source_prompt"
+    | "panorama_prompt"
+    | "negative_prompt"
+    | "notes"
+    | "width"
+    | "height"
+  >
+>;
 
 export type SceneStateUpdate = Partial<
   Pick<
@@ -242,6 +297,47 @@ export const api = {
     request<SceneState>(`/api/projects/${projectId}/scene-states/${sceneStateId}/duplicate`, {
       method: "POST",
     }),
+  listEnvironmentVariants: (projectId: number) =>
+    request<EnvironmentVariant[]>(`/api/projects/${projectId}/environment-variants`),
+  createEnvironmentVariant: (projectId: number, payload: EnvironmentVariantPayload) =>
+    request<EnvironmentVariant>(`/api/projects/${projectId}/environment-variants`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateEnvironmentVariant: (
+    projectId: number,
+    variantId: number,
+    payload: EnvironmentVariantUpdate,
+  ) =>
+    request<EnvironmentVariant>(`/api/projects/${projectId}/environment-variants/${variantId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteEnvironmentVariant: (projectId: number, variantId: number) =>
+    request<{ deleted: boolean }>(
+      `/api/projects/${projectId}/environment-variants/${variantId}`,
+      { method: "DELETE" },
+    ),
+  activateEnvironmentVariant: (projectId: number, variantId: number) =>
+    request<EnvironmentVariant>(
+      `/api/projects/${projectId}/environment-variants/${variantId}/activate`,
+      { method: "POST" },
+    ),
+  uploadEnvironmentSource: (projectId: number, variantId: number, file: File) =>
+    uploadFile<EnvironmentVariant>(
+      `/api/projects/${projectId}/environment-variants/${variantId}/upload-source`,
+      file,
+    ),
+  uploadEnvironmentPanorama: (projectId: number, variantId: number, file: File) =>
+    uploadFile<EnvironmentVariant>(
+      `/api/projects/${projectId}/environment-variants/${variantId}/upload-panorama`,
+      file,
+    ),
+  generateEnvironmentPrompts: (projectId: number, variantId: number) =>
+    request<EnvironmentPromptBundle>(
+      `/api/projects/${projectId}/environment-variants/${variantId}/generate-prompts`,
+      { method: "POST" },
+    ),
   exportSceneJson: (projectId: number, sceneStateId: number) =>
     request<Record<string, unknown>>(
       `/api/projects/${projectId}/scene-states/${sceneStateId}/export-json`,

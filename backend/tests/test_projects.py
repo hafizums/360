@@ -135,6 +135,19 @@ def create_scene_state(client: TestClient, project_id: int, name: str = "Shot 2"
     return response.json()
 
 
+def create_environment_variant(
+    client: TestClient,
+    project_id: int,
+    name: str = "Garden Room",
+) -> dict:
+    response = client.post(
+        f"/api/projects/{project_id}/environment-variants",
+        json={"name": name, "notes": "Leafy and quiet", "width": 2048, "height": 1024},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def test_create_project_success() -> None:
     reset_storage()
     with TestClient(app) as client:
@@ -407,6 +420,221 @@ def test_reject_non_2_to_1_panorama() -> None:
     assert response.json()["detail"] == (
         "Panorama must be a 2:1 equirectangular image, such as 4096x2048."
     )
+
+
+def test_create_environment_variant() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+
+    assert variant["name"] == "Garden Room"
+    assert variant["status"] == "draft"
+    assert variant["generator"] == "manual"
+    assert variant["width"] == 2048
+    assert variant["height"] == 1024
+    assert variant["is_active"] is False
+
+
+def test_list_environment_variants() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.get(f"/api/projects/{project['id']}/environment-variants")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [variant["id"]]
+
+
+def test_update_environment_variant_name_notes_size() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"name": "  Atrium  ", "notes": "  warm light  ", "width": 4096, "height": 2048},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "Atrium"
+    assert payload["notes"] == "warm light"
+    assert payload["width"] == 4096
+    assert payload["height"] == 2048
+
+
+def test_upload_valid_source_image_to_environment_variant() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-source",
+            files={"file": ("source.png", make_image(640, 480), "image/png")},
+        )
+
+    assert response.status_code == 200
+    path = response.json()["source_image_path"]
+    assert path.startswith(f"/uploads/project_{project['id']}/environment_{variant['id']}_source_")
+    assert public_path_to_file(path).exists()
+
+
+def test_upload_valid_panorama_to_environment_variant() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-panorama",
+            files={"file": ("panorama.png", make_image(1024, 512), "image/png")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "panorama_uploaded"
+    assert payload["panorama_image_path"].startswith(
+        f"/uploads/project_{project['id']}/environment_{variant['id']}_panorama_"
+    )
+
+
+def test_reject_non_2_to_1_environment_panorama() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-panorama",
+            files={"file": ("panorama.png", make_image(800, 600), "image/png")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Panorama must be a 2:1 equirectangular image, such as 4096x2048."
+    )
+
+
+def test_generate_environment_prompts() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client, "Cabin")
+        variant = create_environment_variant(client, project["id"], "Forest Interior")
+        response = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/generate-prompts",
+        )
+        updated = client.get(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+        ).json()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "Create a seamless 2:1 equirectangular 360 panorama" in payload["panorama_prompt"]
+    assert "no visible seams" in payload["negative_prompt"]
+    assert "Upload a normal source image" in payload["manual_instructions"]
+    assert updated["status"] == "prompt_ready"
+    assert updated["panorama_prompt"] == payload["panorama_prompt"]
+
+
+def test_activate_environment_variant_updates_project_paths() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        source = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-source",
+            files={"file": ("source.png", make_image(640, 480), "image/png")},
+        ).json()
+        panorama = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-panorama",
+            files={"file": ("panorama.png", make_image(1024, 512), "image/png")},
+        ).json()
+        response = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/activate",
+        )
+        project_response = client.get(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+    assert project_response.json()["source_image_path"] == source["source_image_path"]
+    assert project_response.json()["panorama_image_path"] == panorama["panorama_image_path"]
+
+
+def test_only_one_active_environment_variant_per_project() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        first = create_environment_variant(client, project["id"], "First")
+        second = create_environment_variant(client, project["id"], "Second")
+        client.post(f"/api/projects/{project['id']}/environment-variants/{first['id']}/activate")
+        client.post(f"/api/projects/{project['id']}/environment-variants/{second['id']}/activate")
+        variants = client.get(f"/api/projects/{project['id']}/environment-variants").json()
+
+    active_ids = [variant["id"] for variant in variants if variant["is_active"]]
+    assert active_ids == [second["id"]]
+
+
+def test_delete_non_active_environment_variant() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        uploaded = client.post(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}/upload-source",
+            files={"file": ("source.png", make_image(640, 480), "image/png")},
+        ).json()
+        source_file = public_path_to_file(uploaded["source_image_path"])
+        response = client.delete(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+        )
+        variants = client.get(f"/api/projects/{project['id']}/environment-variants").json()
+
+    assert response.status_code == 200
+    assert variants == []
+    assert not source_file.exists()
+
+
+def test_environment_variant_delete_does_not_delete_shared_project_file() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        uploaded_project = upload_source(client, project["id"])
+        variant = create_environment_variant(client, project["id"])
+        with db_session() as conn:
+            conn.execute(
+                """
+                UPDATE environment_variants
+                SET source_image_path = ?
+                WHERE id = ?
+                """,
+                (uploaded_project["source_image_path"], variant["id"]),
+            )
+        response = client.delete(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+        )
+
+    assert response.status_code == 200
+    assert public_path_to_file(uploaded_project["source_image_path"]).exists()
+
+
+def test_project_export_includes_environment_variants() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        client.post(f"/api/projects/{project['id']}/environment-variants/{variant['id']}/activate")
+        response = client.get(f"/api/projects/{project['id']}/export-package")
+        scene_state = list_scene_states(client, project["id"])[0]
+        scene_export = client.get(
+            f"/api/projects/{project['id']}/scene-states/{scene_state['id']}/export-json",
+        )
+
+    assert scene_export.status_code == 200
+    assert scene_export.json()["active_environment_variant"]["id"] == variant["id"]
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert "environment_variants.json" in archive.namelist()
+        variants = archive.read("environment_variants.json").decode("utf-8")
+    assert "Garden Room" in variants
 
 
 def test_replacing_source_image_removes_previous_uploaded_source_file() -> None:

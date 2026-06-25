@@ -69,3 +69,24 @@ def scene_state_from_row(row: Row) -> dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def environment_variant_from_row(row: Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "name": row["name"],
+        "source_image_path": row["source_image_path"],
+        "panorama_image_path": row["panorama_image_path"],
+        "status": row["status"],
+        "generator": row["generator"],
+        "source_prompt": row["source_prompt"],
+        "panorama_prompt": row["panorama_prompt"],
+        "negative_prompt": row["negative_prompt"],
+        "notes": row["notes"],
+        "width": row["width"],
+        "height": row["height"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }

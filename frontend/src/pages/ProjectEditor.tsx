@@ -8,6 +8,8 @@ import {
   CharacterAsset,
   CharacterInstance,
   CharacterInstanceUpdate,
+  EnvironmentPromptBundle,
+  EnvironmentVariant,
   Project,
   SceneState,
   SceneStateUpdate,
@@ -37,7 +39,7 @@ const CAMERA_MOVES: CameraMove[] = [
   "dolly",
   "zoom",
 ];
-type InspectorTab = "setup" | "shot" | "characters" | "export";
+type InspectorTab = "setup" | "environment" | "shot" | "characters" | "export";
 type SaveStatus = "saved" | "unsaved" | "saving" | "error";
 
 export default function ProjectEditor() {
@@ -45,12 +47,17 @@ export default function ProjectEditor() {
   const params = useParams();
   const projectId = Number(params.projectId);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
+  const environmentSourceInputRef = useRef<HTMLInputElement | null>(null);
+  const environmentPanoramaInputRef = useRef<HTMLInputElement | null>(null);
   const viewerRef = useRef<PanoramaViewerHandle | null>(null);
   const autosaveTimerRef = useRef<number | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
   const [sceneStates, setSceneStates] = useState<SceneState[]>([]);
+  const [environmentVariants, setEnvironmentVariants] = useState<EnvironmentVariant[]>([]);
+  const [selectedEnvironmentVariantId, setSelectedEnvironmentVariantId] = useState<number | null>(null);
+  const [environmentPrompts, setEnvironmentPrompts] = useState<EnvironmentPromptBundle | null>(null);
   const [selectedSceneStateId, setSelectedSceneStateId] = useState<number | null>(null);
   const [assets, setAssets] = useState<CharacterAsset[]>([]);
   const [instances, setInstances] = useState<CharacterInstance[]>([]);
@@ -63,6 +70,7 @@ export default function ProjectEditor() {
   const [sceneSaving, setSceneSaving] = useState(false);
   const [sceneSaveStatus, setSceneSaveStatus] = useState<SaveStatus>("saved");
   const [assetBusy, setAssetBusy] = useState(false);
+  const [environmentBusy, setEnvironmentBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [panelsCollapsed, setPanelsCollapsed] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
@@ -75,6 +83,8 @@ export default function ProjectEditor() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
   const [assetStatus, setAssetStatus] = useState<string | null>(null);
+  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const [environmentStatus, setEnvironmentStatus] = useState<string | null>(null);
   const [instanceError, setInstanceError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -86,10 +96,11 @@ export default function ProjectEditor() {
 
     async function loadEditor() {
       try {
-        const [loadedProject, loadedAssets, loadedSceneStates] = await Promise.all([
+        const [loadedProject, loadedAssets, loadedSceneStates, loadedEnvironmentVariants] = await Promise.all([
           api.getProject(projectId),
           api.listCharacterAssets(projectId),
           api.listSceneStates(projectId),
+          api.listEnvironmentVariants(projectId),
         ]);
         const selectedSceneState = loadedSceneStates[0] ?? null;
         const loadedInstances = selectedSceneState
@@ -100,6 +111,12 @@ export default function ProjectEditor() {
         setProjectDescription(loadedProject.description);
         setAssets(loadedAssets);
         setSceneStates(loadedSceneStates);
+        setEnvironmentVariants(loadedEnvironmentVariants);
+        setSelectedEnvironmentVariantId(
+          loadedEnvironmentVariants.find((variant) => variant.is_active)?.id ??
+            loadedEnvironmentVariants[0]?.id ??
+            null,
+        );
         setSelectedSceneStateId(selectedSceneState?.id ?? null);
         setInstances(loadedInstances);
         setSelectedInstanceId(loadedInstances[0]?.id ?? null);
@@ -117,6 +134,8 @@ export default function ProjectEditor() {
     instances.find((instance) => instance.id === selectedInstanceId) ?? null;
   const selectedSceneState =
     sceneStates.find((state) => state.id === selectedSceneStateId) ?? null;
+  const selectedEnvironmentVariant =
+    environmentVariants.find((variant) => variant.id === selectedEnvironmentVariantId) ?? null;
 
   useEffect(() => {
     if (sceneSaveStatus !== "unsaved" || !selectedSceneState) {
@@ -743,6 +762,187 @@ export default function ProjectEditor() {
     }
   }
 
+  function replaceEnvironmentVariant(updated: EnvironmentVariant) {
+    setEnvironmentVariants((current) =>
+      current.map((variant) => (variant.id === updated.id ? updated : variant)),
+    );
+  }
+
+  async function createEnvironmentVariant() {
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const variant = await api.createEnvironmentVariant(activeProject.id, {
+        name: `Environment ${environmentVariants.length + 1}`,
+        notes: "",
+        width: 4096,
+        height: 2048,
+      });
+      setEnvironmentVariants((current) => [variant, ...current]);
+      setSelectedEnvironmentVariantId(variant.id);
+      setEnvironmentPrompts(null);
+      setEnvironmentStatus("Environment variant created.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not create environment.");
+    } finally {
+      setEnvironmentBusy(false);
+    }
+  }
+
+  async function updateSelectedEnvironmentVariant(patch: Partial<EnvironmentVariant>) {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    const local = { ...selectedEnvironmentVariant, ...patch };
+    replaceEnvironmentVariant(local);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const updated = await api.updateEnvironmentVariant(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+        patch,
+      );
+      replaceEnvironmentVariant(updated);
+      setEnvironmentStatus("Environment saved.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not save environment.");
+    }
+  }
+
+  async function handleEnvironmentSourceUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !selectedEnvironmentVariant) {
+      return;
+    }
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const updated = await api.uploadEnvironmentSource(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+        file,
+      );
+      replaceEnvironmentVariant(updated);
+      setEnvironmentStatus("Source image uploaded.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not upload source image.");
+    } finally {
+      setEnvironmentBusy(false);
+      event.target.value = "";
+    }
+  }
+
+  async function handleEnvironmentPanoramaUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !selectedEnvironmentVariant) {
+      return;
+    }
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const updated = await api.uploadEnvironmentPanorama(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+        file,
+      );
+      replaceEnvironmentVariant(updated);
+      if (updated.is_active) {
+        const refreshedProject = await api.getProject(activeProject.id);
+        setProject(refreshedProject);
+      }
+      setEnvironmentStatus("Panorama uploaded.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not upload panorama.");
+    } finally {
+      setEnvironmentBusy(false);
+      event.target.value = "";
+    }
+  }
+
+  async function generateEnvironmentPrompts() {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const prompts = await api.generateEnvironmentPrompts(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+      );
+      const updated = await api.updateEnvironmentVariant(activeProject.id, selectedEnvironmentVariant.id, {});
+      replaceEnvironmentVariant(updated);
+      setEnvironmentPrompts(prompts);
+      setEnvironmentStatus("Environment prompts generated.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not generate prompts.");
+    } finally {
+      setEnvironmentBusy(false);
+    }
+  }
+
+  async function activateEnvironmentVariant() {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      const activated = await api.activateEnvironmentVariant(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+      );
+      const [variants, refreshedProject] = await Promise.all([
+        api.listEnvironmentVariants(activeProject.id),
+        api.getProject(activeProject.id),
+      ]);
+      setEnvironmentVariants(variants);
+      setSelectedEnvironmentVariantId(activated.id);
+      setProject(refreshedProject);
+      setEnvironmentStatus("Environment activated.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not activate environment.");
+    } finally {
+      setEnvironmentBusy(false);
+    }
+  }
+
+  async function deleteSelectedEnvironmentVariant() {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    if (!window.confirm("Delete this environment variant?")) {
+      return;
+    }
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    setEnvironmentStatus(null);
+    try {
+      await api.deleteEnvironmentVariant(activeProject.id, selectedEnvironmentVariant.id);
+      const [variants, refreshedProject] = await Promise.all([
+        api.listEnvironmentVariants(activeProject.id),
+        api.getProject(activeProject.id),
+      ]);
+      setEnvironmentVariants(variants);
+      setSelectedEnvironmentVariantId(
+        variants.find((variant) => variant.is_active)?.id ?? variants[0]?.id ?? null,
+      );
+      setProject(refreshedProject);
+      setEnvironmentPrompts(null);
+      setEnvironmentStatus("Environment deleted.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not delete environment.");
+    } finally {
+      setEnvironmentBusy(false);
+    }
+  }
+
   return (
     <main className={panelsCollapsed ? "editor-shell panels-collapsed" : "editor-shell"}>
       <header className="editor-appbar">
@@ -906,6 +1106,13 @@ export default function ProjectEditor() {
             Setup
           </button>
           <button
+            className={activeInspectorTab === "environment" ? "active" : ""}
+            type="button"
+            onClick={() => setActiveInspectorTab("environment")}
+          >
+            Environment
+          </button>
+          <button
             className={activeInspectorTab === "shot" ? "active" : ""}
             type="button"
             onClick={() => setActiveInspectorTab("shot")}
@@ -1004,6 +1211,210 @@ export default function ProjectEditor() {
                 </section>
               ) : null}
             </>
+          ) : null}
+
+          {activeInspectorTab === "environment" ? (
+            <section className="panel scene-panel">
+              <div className="panel-heading">
+                <h2>Environment Builder</h2>
+                <span>{environmentVariants.length}</span>
+              </div>
+              <div className="object-list">
+                {environmentVariants.map((variant) => (
+                  <button
+                    className={
+                      variant.id === selectedEnvironmentVariantId
+                        ? "object-row selected"
+                        : "object-row"
+                    }
+                    key={variant.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedEnvironmentVariantId(variant.id);
+                      setEnvironmentPrompts(null);
+                    }}
+                  >
+                    <span>{variant.name}</span>
+                    <span>{variant.is_active ? "Active" : variant.status}</span>
+                  </button>
+                ))}
+                {environmentVariants.length === 0 ? (
+                  <p className="muted">No environment variants yet.</p>
+                ) : null}
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={environmentBusy}
+                data-testid="create-environment-variant"
+                onClick={() => void createEnvironmentVariant()}
+              >
+                New environment
+              </button>
+
+              {selectedEnvironmentVariant ? (
+                <>
+                  <label>
+                    Variant name
+                    <input
+                      value={selectedEnvironmentVariant.name}
+                      onChange={(event) =>
+                        void updateSelectedEnvironmentVariant({ name: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Notes
+                    <textarea
+                      rows={4}
+                      value={selectedEnvironmentVariant.notes}
+                      onChange={(event) =>
+                        void updateSelectedEnvironmentVariant({ notes: event.target.value })
+                      }
+                    />
+                  </label>
+                  <div className="field-grid">
+                    <NumberField
+                      label="Width"
+                      min={512}
+                      max={12000}
+                      value={selectedEnvironmentVariant.width}
+                      onChange={(value) =>
+                        void updateSelectedEnvironmentVariant({ width: Math.round(value) })
+                      }
+                    />
+                    <NumberField
+                      label="Height"
+                      min={256}
+                      max={12000}
+                      value={selectedEnvironmentVariant.height}
+                      onChange={(value) =>
+                        void updateSelectedEnvironmentVariant({ height: Math.round(value) })
+                      }
+                    />
+                  </div>
+                  <div className="row-actions full-width">
+                    <input
+                      ref={environmentSourceInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      hidden
+                      onChange={handleEnvironmentSourceUpload}
+                    />
+                    <input
+                      ref={environmentPanoramaInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      hidden
+                      onChange={handleEnvironmentPanoramaUpload}
+                    />
+                    <button
+                      type="button"
+                      disabled={environmentBusy}
+                      onClick={() => environmentSourceInputRef.current?.click()}
+                    >
+                      Upload source
+                    </button>
+                    <button
+                      type="button"
+                      disabled={environmentBusy}
+                      onClick={() => environmentPanoramaInputRef.current?.click()}
+                    >
+                      Upload panorama
+                    </button>
+                  </div>
+                  <p className="file-path">
+                    Source: {selectedEnvironmentVariant.source_image_path ?? "not uploaded"}
+                  </p>
+                  <p className="file-path">
+                    Panorama: {selectedEnvironmentVariant.panorama_image_path ?? "not uploaded"}
+                  </p>
+                  <div className="row-actions full-width">
+                    <button
+                      type="button"
+                      disabled={environmentBusy}
+                      data-testid="generate-environment-prompts"
+                      onClick={() => void generateEnvironmentPrompts()}
+                    >
+                      Generate prompts
+                    </button>
+                    <button
+                      type="button"
+                      disabled={environmentBusy}
+                      data-testid="activate-environment-variant"
+                      onClick={() => void activateEnvironmentVariant()}
+                    >
+                      Activate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={environmentBusy}
+                      onClick={() => void deleteSelectedEnvironmentVariant()}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  <PromptBlock
+                    title="Source analysis checklist"
+                    text={
+                      environmentPrompts?.source_analysis_checklist ??
+                      selectedEnvironmentVariant.source_prompt
+                    }
+                    testId="copy-source-checklist"
+                    onCopy={() =>
+                      void copyPrompt(
+                        environmentPrompts?.source_analysis_checklist ??
+                          selectedEnvironmentVariant.source_prompt,
+                      )
+                    }
+                  />
+                  <PromptBlock
+                    title="Panorama generation prompt"
+                    text={
+                      environmentPrompts?.panorama_prompt ??
+                      selectedEnvironmentVariant.panorama_prompt
+                    }
+                    testId="copy-panorama-prompt"
+                    onCopy={() =>
+                      void copyPrompt(
+                        environmentPrompts?.panorama_prompt ??
+                          selectedEnvironmentVariant.panorama_prompt,
+                      )
+                    }
+                  />
+                  <PromptBlock
+                    title="Environment negative prompt"
+                    text={
+                      environmentPrompts?.negative_prompt ??
+                      selectedEnvironmentVariant.negative_prompt
+                    }
+                    testId="copy-environment-negative"
+                    onCopy={() =>
+                      void copyPrompt(
+                        environmentPrompts?.negative_prompt ??
+                          selectedEnvironmentVariant.negative_prompt,
+                      )
+                    }
+                  />
+                  <PromptBlock
+                    title="Manual instructions"
+                    text={
+                      environmentPrompts?.manual_instructions ??
+                      buildManualEnvironmentInstructions()
+                    }
+                    testId="copy-manual-instructions"
+                    onCopy={() =>
+                      void copyPrompt(
+                        environmentPrompts?.manual_instructions ??
+                          buildManualEnvironmentInstructions(),
+                      )
+                    }
+                  />
+                </>
+              ) : null}
+              {environmentStatus ? <p className="success-text">{environmentStatus}</p> : null}
+              {environmentError ? <p className="error-text">{environmentError}</p> : null}
+            </section>
           ) : null}
 
           {activeInspectorTab === "shot" && selectedSceneState ? (
@@ -1642,6 +2053,18 @@ function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   downloadUrl(url, filename);
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function buildManualEnvironmentInstructions(): string {
+  return [
+    "1. Upload a normal source image.",
+    "2. Copy the panorama prompt and negative prompt.",
+    "3. Generate a 2:1 equirectangular image in an external AI image tool manually.",
+    "4. Download the generated result.",
+    "5. Upload the result as this panorama variant.",
+    "6. Activate the variant.",
+    "7. Continue character placement in the 360 editor.",
+  ].join("\n");
 }
 
 function waitForViewerFrame(): Promise<void> {

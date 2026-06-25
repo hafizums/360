@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_cors_origins, get_upload_dir
 from app.database import init_db
-from app.routers import characters, exports, projects, scene_states, uploads
+from app.routers import characters, environments, exports, projects, scene_states, uploads
 
 app = FastAPI(title="360 Scene Stager API")
 
@@ -26,6 +26,7 @@ uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.include_router(projects.router)
 app.include_router(uploads.router)
+app.include_router(environments.router)
 app.include_router(characters.router)
 app.include_router(scene_states.router)
 app.include_router(exports.router)

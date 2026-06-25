@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.database import db_session
-from app.models import character_asset_from_row, character_instance_from_row, project_from_row, scene_state_from_row
+from app.models import (
+    character_asset_from_row,
+    character_instance_from_row,
+    environment_variant_from_row,
+    project_from_row,
+    scene_state_from_row,
+)
 
 
 def build_character_summary(instances: list[dict]) -> str:
@@ -71,6 +77,14 @@ def build_scene_export(project_id: int, scene_state_id: int) -> dict:
             """,
             (project_id, scene_state_id),
         ).fetchall()
+        environment_rows = conn.execute(
+            """
+            SELECT * FROM environment_variants
+            WHERE project_id = ?
+            ORDER BY is_active DESC, updated_at DESC, id DESC
+            """,
+            (project_id,),
+        ).fetchall()
         instances = [character_instance_from_row(row) for row in instance_rows]
         asset_ids = sorted({instance["character_asset_id"] for instance in instances})
         if asset_ids:
@@ -89,12 +103,19 @@ def build_scene_export(project_id: int, scene_state_id: int) -> dict:
     project = project_from_row(project_row)
     scene_state = scene_state_from_row(scene_row)
     assets = [character_asset_from_row(row) for row in asset_rows]
+    environment_variants = [environment_variant_from_row(row) for row in environment_rows]
+    active_environment_variant = next(
+        (variant for variant in environment_variants if variant["is_active"]),
+        None,
+    )
     prompts = build_prompts(project, scene_state, instances)
 
     return {
         "project": project,
         "panorama_path": project["panorama_image_path"],
         "source_image_path": project["source_image_path"],
+        "environment_variants": environment_variants,
+        "active_environment_variant": active_environment_variant,
         "scene_state": scene_state,
         "camera": {
             "position": {
@@ -139,11 +160,24 @@ def build_project_export(project_id: int) -> dict:
             "SELECT * FROM character_instances WHERE project_id = ? ORDER BY scene_state_id ASC, id ASC",
             (project_id,),
         ).fetchall()
+        environment_rows = conn.execute(
+            """
+            SELECT * FROM environment_variants
+            WHERE project_id = ?
+            ORDER BY is_active DESC, updated_at DESC, id DESC
+            """,
+            (project_id,),
+        ).fetchall()
 
     project = project_from_row(project_row)
     scene_states = [scene_state_from_row(row) for row in scene_rows]
     assets = [character_asset_from_row(row) for row in asset_rows]
     instances = [character_instance_from_row(row) for row in instance_rows]
+    environment_variants = [environment_variant_from_row(row) for row in environment_rows]
+    active_environment_variant = next(
+        (variant for variant in environment_variants if variant["is_active"]),
+        None,
+    )
     prompts_by_scene = []
     for scene_state in scene_states:
         scene_instances = [
@@ -160,6 +194,8 @@ def build_project_export(project_id: int) -> dict:
     return {
         "project": project,
         "scene_states": scene_states,
+        "environment_variants": environment_variants,
+        "active_environment_variant": active_environment_variant,
         "character_assets": assets,
         "character_instances": instances,
         "prompts_by_scene": prompts_by_scene,

@@ -112,6 +112,10 @@ def delete_project(project_id: int) -> dict[str, bool]:
             "DELETE FROM scene_states WHERE project_id = ?",
             (project_id,),
         )
+        conn.execute(
+            "DELETE FROM environment_variants WHERE project_id = ?",
+            (project_id,),
+        )
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
     safe_delete_project_upload_folder(project_id)

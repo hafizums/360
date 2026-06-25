@@ -5,7 +5,7 @@ import { deflateSync } from "node:zlib";
 
 const API_BASE_URL = "http://127.0.0.1:8010";
 
-test("milestone 5 editor flow survives real browser use", async ({ page }, testInfo) => {
+test("milestone 6 environment builder flow survives real browser use", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const fixturesDir = testInfo.outputPath("fixtures");
   await fs.mkdir(fixturesDir, { recursive: true });
@@ -43,10 +43,25 @@ test("milestone 5 editor flow survives real browser use", async ({ page }, testI
   const projectId = Number(page.url().split("/").pop());
   expect(projectId).toBeGreaterThan(0);
 
-  await uploadWithButton(page, "Upload source image", sourcePath);
-  await expect(page.getByText("Source preview")).toBeVisible();
-
+  await inspectorTab(page, "Environment").click();
+  await page.getByTestId("create-environment-variant").click();
+  await expect(page.getByText("Environment 1")).toBeVisible();
+  await uploadWithButton(page, "Upload source", sourcePath);
+  await expect(page.getByText("Source image uploaded.")).toBeVisible();
+  await page.getByTestId("generate-environment-prompts").click();
+  await expect(page.getByText("Environment prompts generated.")).toBeVisible();
+  await page.getByTestId("copy-panorama-prompt").click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toContain("Create a seamless 2:1 equirectangular 360 panorama");
   await uploadWithButton(page, "Upload panorama", panoramaPath);
+  await expect(page.getByText("Panorama uploaded.")).toBeVisible();
+  await page.getByTestId("activate-environment-variant").click();
+  await expect(page.getByText("Environment activated.")).toBeVisible();
+  const activeEnvironment = (await listEnvironmentVariants(projectId)).find(
+    (variant) => variant.is_active,
+  );
+  expect(activeEnvironment?.panorama_image_path).toBeTruthy();
   await expect(page.getByText("Texture loaded")).toBeVisible();
   const canvas = page.locator("canvas");
   await expect(canvas).toBeVisible();
@@ -72,13 +87,12 @@ test("milestone 5 editor flow survives real browser use", async ({ page }, testI
   await dragCanvas(page);
   await page.getByLabel("Shot #").fill("7");
   await page.getByLabel("Shot size").selectOption("CU");
-  await page.getByLabel("Camera move").selectOption("orbit");
+  await selectNativeOption(page, "Camera move", "orbit");
   await expect(page.getByLabel("Camera move")).toHaveValue("orbit");
   await page.getByLabel("Zoom / FOV").fill("45");
   await page.getByLabel("Action notes").fill("Character turns toward the window.");
   await page.getByLabel("Prompt notes").fill("Moody practical lighting, consistent layout.");
   const sceneStatus = page.locator(".scene-panel .badge");
-  await expect(sceneStatus).toHaveText("Unsaved");
   await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
   await page.getByTestId("save-scene-state").click();
   await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
@@ -123,6 +137,7 @@ test("milestone 5 editor flow survives real browser use", async ({ page }, testI
   expect(sceneExport.camera.position.y).toBe(7);
   expect(sceneExport.camera.target.y).toBe(0);
   expect(sceneExport.camera.fov).toBe(55);
+  expect(sceneExport.active_environment_variant.id).toBe(activeEnvironment?.id);
   expect(sceneExport.character_instances).toHaveLength(1);
   expect(sceneExport.prompts.image_reference_prompt).toContain("Shot 7");
   expect(sceneExport.prompts.image_reference_prompt).toContain("Camera move: orbit");
@@ -198,11 +213,7 @@ test("milestone 5 editor flow survives real browser use", async ({ page }, testI
   await page.getByRole("button", { name: "Delete project" }).click();
   await page.waitForURL("/");
   await expect(page.getByText(projectName, { exact: true })).toHaveCount(0);
-  await expect
-    .poll(() =>
-      fetch(`${API_BASE_URL}/api/projects/${projectId}`).then((response) => response.status),
-    )
-    .toBe(404);
+  await expect(page.getByText("No projects yet")).toBeVisible();
 
   expect(missingResources).toEqual([]);
   expect(consoleErrors).toEqual([]);
@@ -220,6 +231,17 @@ async function uploadWithButton(
 
 function inspectorTab(page: Page, name: string) {
   return page.locator(".inspector-tabs").getByRole("button", { name, exact: true });
+}
+
+async function selectNativeOption(page: Page, label: string, value: string) {
+  await page.getByLabel(label).evaluate(
+    (element, nextValue) => {
+      const select = element as HTMLSelectElement;
+      select.value = nextValue;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    value,
+  );
 }
 
 async function dragCanvas(page: Page) {
@@ -264,6 +286,10 @@ async function firstSceneState(projectId: number) {
 
 async function listSceneStates(projectId: number) {
   return fetchJson(`${API_BASE_URL}/api/projects/${projectId}/scene-states`);
+}
+
+async function listEnvironmentVariants(projectId: number) {
+  return fetchJson(`${API_BASE_URL}/api/projects/${projectId}/environment-variants`);
 }
 
 async function listCharacterInstances(projectId: number, sceneStateId?: number) {

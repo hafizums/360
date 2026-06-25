@@ -16,6 +16,13 @@ ALLOWED_CAMERA_MOVES = {
     "dolly",
     "zoom",
 }
+ALLOWED_ENVIRONMENT_STATUSES = {
+    "draft",
+    "prompt_ready",
+    "panorama_uploaded",
+    "active",
+    "archived",
+}
 
 
 def clean_project_name(value: str) -> str:
@@ -72,6 +79,119 @@ class Project(ProjectBase):
     panorama_image_path: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+def clean_environment_variant_name(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Environment variant name is required.")
+    return stripped
+
+
+def clean_environment_status(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in ALLOWED_ENVIRONMENT_STATUSES:
+        raise ValueError(
+            "Environment status must be draft, prompt_ready, panorama_uploaded, active, or archived."
+        )
+    return normalized
+
+
+class EnvironmentVariantCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="New Environment", min_length=1, max_length=120)
+    notes: str = ""
+    width: int = Field(default=4096, ge=512, le=12000)
+    height: int = Field(default=2048, ge=256, le=12000)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_and_validate_name(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Environment variant name must be text.")
+        return clean_environment_variant_name(value)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def validate_notes(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Environment notes must be text.")
+        return value.strip()
+
+
+class EnvironmentVariantUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    status: str | None = None
+    generator: str | None = Field(default=None, max_length=80)
+    source_prompt: str | None = None
+    panorama_prompt: str | None = None
+    negative_prompt: str | None = None
+    notes: str | None = None
+    width: int | None = Field(default=None, ge=512, le=12000)
+    height: int | None = Field(default=None, ge=256, le=12000)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Environment variant name must be text.")
+        return clean_environment_variant_name(value)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_optional_status(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Environment status must be text.")
+        return clean_environment_status(value)
+
+    @field_validator(
+        "generator",
+        "source_prompt",
+        "panorama_prompt",
+        "negative_prompt",
+        "notes",
+        mode="before",
+    )
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Environment text fields must be text.")
+        return value.strip()
+
+
+class EnvironmentVariant(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    source_image_path: str | None = None
+    panorama_image_path: str | None = None
+    status: str
+    generator: str
+    source_prompt: str
+    panorama_prompt: str
+    negative_prompt: str
+    notes: str
+    width: int
+    height: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class EnvironmentPromptBundle(BaseModel):
+    source_analysis_checklist: str
+    panorama_prompt: str
+    negative_prompt: str
+    manual_instructions: str
 
 
 def clean_character_name(value: str, label: str = "Character name") -> str:
