@@ -23,6 +23,7 @@ backend/
     schemas.py
     routers/
       characters.py
+      environments.py
       exports.py
       projects.py
       scene_states.py
@@ -62,6 +63,17 @@ Workflow:
 9. Continue shot planning and character placement.
 
 Use `2048x1024` for fast tests and `4096x2048` for better-quality working panoramas. Activating a variant updates the project source/panorama paths so the existing viewer uses the active panorama while scene states and character placements remain unchanged.
+
+Environment variants also store floor and horizon calibration:
+
+- Horizon guide Y, shown as an overlay line in the panorama viewer.
+- Floor Y, grid size, and grid divisions for the 3D floor guide.
+- Placement radius for the default character blocking circle.
+- Default character scale.
+- Camera height for eye-level camera presets.
+- Calibration notes for exports and prompt context.
+
+New character instances use the active environment calibration. If no active environment exists, the app falls back to the original defaults.
 
 ## Backend Setup
 
@@ -125,17 +137,18 @@ VITE_API_URL=http://127.0.0.1:8000
 9. The panorama must be a 2:1 equirectangular image, such as `4096x2048` or `2048x1024`.
 10. Upload a `.glb` character model in the Character assets panel.
 11. Add the character to `Base Scene`.
-12. Use Reset transform, Focus selected, Hide guides, and the transform fields as needed.
-13. Adjust the camera view and click `Save camera`.
-14. Fill shot number, shot size, camera move, action notes, and prompt notes. Scene metadata autosaves after a short debounce; the manual Save state button remains available.
-15. Download a clean screenshot and scene JSON for the selected state.
-16. Copy the image and video prompts from Prompt export.
-17. Duplicate or create scene states for new shots, then use Up/Down to reorder them.
-18. Move the character differently in another state and save its camera.
-19. Switch between scene states and confirm camera, object list, and viewer placements change.
-20. Download the project package ZIP.
-21. Refresh the browser and confirm environment variants, scene states, shot metadata, camera framing, ordering, and placements persist.
-22. Use Delete project only when you want to remove the project metadata and its local `uploads/project_<id>/` folder.
+12. Calibrate the environment floor, horizon, placement radius, default character scale, and camera height if needed.
+13. Use Reset transform, Calibrated reset, Drop to floor, Placement radius, Default scale, Focus selected, Hide guides, and the transform fields as needed.
+14. Adjust the camera view or use Eye-level, Top-down, and Face selected, then click `Save camera`.
+15. Fill shot number, shot size, camera move, action notes, and prompt notes. Scene metadata autosaves after a short debounce; the manual Save state button remains available.
+16. Download a clean screenshot and scene JSON for the selected state.
+17. Copy the image and video prompts from Prompt export.
+18. Duplicate or create scene states for new shots, then use Up/Down to reorder them.
+19. Move the character differently in another state and save its camera.
+20. Switch between scene states and confirm camera, object list, and viewer placements change.
+21. Download the project package ZIP.
+22. Refresh the browser and confirm environment variants, calibration, scene states, shot metadata, camera framing, ordering, and placements persist.
+23. Use Delete project only when you want to remove the project metadata and its local `uploads/project_<id>/` folder.
 
 ## Scene States / Shot States
 
@@ -172,15 +185,15 @@ The panorama viewer exposes the current camera position, OrbitControls target, a
 
 Switching scene states restores that state's saved camera framing. `Reset camera` reloads the currently selected scene state's saved camera values.
 
-Use `Zoom / FOV` to adjust camera zoom numerically. Lower FOV zooms in; higher FOV widens the view. `Drone view` applies an overhead camera preset that can be saved like any other camera framing.
+Use `Zoom / FOV` to adjust camera zoom numerically. Lower FOV zooms in; higher FOV widens the view. `Eye-level` uses the active environment camera height and placement radius, `Top-down` uses the calibrated floor, and `Face selected` frames the selected character. Each preset can be saved like any other camera framing.
 
 ## Exports
 
 Screenshot export is browser-local. Click `Download screenshot` to save the current viewer canvas as `project-{projectId}-shot-{shotNumber}-scene-{sceneStateId}.png`.
 
-Clean export is enabled by default in the Export panel. When enabled, grid and transform controls are temporarily hidden for the screenshot, then restored in the editor afterward.
+Clean export is enabled by default in the Export panel. When enabled, calibration guides, grid, and transform controls are temporarily hidden for the screenshot, then restored in the editor afterward.
 
-Scene JSON export is served by `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`. It downloads as `project-{projectId}-shot-{shotNumber}-scene-{sceneStateId}.json` and includes project metadata, panorama/source paths, selected scene state metadata, saved camera metadata, character assets used by the scene, character instances, coordinate convention, prompts, and a `generated_at` timestamp.
+Scene JSON export is served by `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`. It downloads as `project-{projectId}-shot-{shotNumber}-scene-{sceneStateId}.json` and includes project metadata, panorama/source paths, environment variants, active environment calibration, selected scene state metadata, saved camera metadata, character assets used by the scene, character instances, coordinate convention, prompts, and a `generated_at` timestamp.
 
 Prompt export is deterministic and local. It includes shot number, shot size, camera move, scene description, action notes, prompt notes, and character placement. It does not call an LLM or provider. The panel provides copy buttons for:
 
@@ -189,9 +202,9 @@ Prompt export is deterministic and local. It includes shot number, shot size, ca
 - Negative / consistency prompt.
 - Character placement summary.
 
-Project package export is served by `GET /api/projects/{project_id}/export-package`. It returns a ZIP containing `project.json`, `scene_states.json`, `character_assets.json`, `character_instances.json`, and `prompts.txt`. Large uploaded image and model binaries are not included yet; the package stores their local/public paths.
+Project package export is served by `GET /api/projects/{project_id}/export-package`. It returns a ZIP containing `project.json`, `environment_variants.json`, `environment_calibration.json`, `scene_states.json`, `character_assets.json`, `character_instances.json`, and `prompts.txt`. Large uploaded image and model binaries are not included yet; the package stores their local/public paths.
 
-Project package export also includes `environment_variants.json`. Scene JSON export includes all environment variants and the active environment variant for the selected project.
+Scene JSON export includes all environment variants and the active environment variant for the selected project. Prompt export includes an environment calibration summary so later provider adapters can preserve floor, scale, and camera-height assumptions.
 
 ## Character Placement
 
@@ -200,20 +213,23 @@ Project package export also includes `environment_variants.json`. Scene JSON exp
 3. Select the placed character in the Objects panel or in the 3D viewer.
 4. Use Move, Rotate, and Scale modes to edit the selected character with TransformControls.
 5. Use the inspector to fine tune name, position, rotation, scale, and visibility, then save.
-6. Use Reset transform to return the selected instance to `x=0`, `y=0`, `z=-2`, rotation `0,0,0`, scale `1`.
-7. Use Focus selected to aim the camera target at the selected character without changing the character transform.
-8. Use Hide guides to hide the grid and transform controls while keeping objects selectable from the object list.
-9. Duplicate an instance to create another placement of the same asset.
-10. Refresh the browser and confirm the placements remain.
-11. Delete one instance and confirm other placements remain.
+6. Use Reset transform to return the selected instance to the original app defaults: `x=0`, `y=0`, `z=-2`, rotation `0,0,0`, scale `1`.
+7. Use Calibrated reset to place the selected instance at the active environment floor, negative placement radius, zero rotation, and default character scale.
+8. Use Drop to floor, Placement radius, and Default scale for targeted calibration fixes.
+9. Use Focus selected to aim the camera target at the selected character without changing the character transform.
+10. Use Hide guides to hide transform controls and the calibration grid while keeping objects selectable from the object list.
+11. Duplicate an instance to create another placement of the same asset.
+12. Refresh the browser and confirm the placements remain.
+13. Delete one instance and confirm other placements remain.
 
 Refreshing the browser keeps project metadata, uploaded image paths, character assets, scene states, and character placements because they are stored in SQLite.
 
 ## Coordinate Convention
 
 - `y` is up.
-- The floor grid is at `y = 0`.
-- New character instances start at `x = 0`, `y = 0`, `z = -2`.
+- The calibrated floor grid defaults to `y = 0`.
+- New character instances use the active environment floor Y, negative placement radius, and default character scale.
+- If no active environment calibration exists, new character instances start at `x = 0`, `y = 0`, `z = -2`, scale `1`.
 - Rotation is stored in radians. The inspector shows rotation in degrees for editing.
 - Scale is stored as one uniform scalar.
 
@@ -258,6 +274,8 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 
 `GET /api/projects/{project_id}/character-instances` accepts an optional `scene_state_id` query parameter. If omitted, the backend uses the project's first/default scene state. Creating an instance also accepts optional `scene_state_id`.
 
+`PATCH /api/projects/{project_id}/environment-variants/{variant_id}` stores environment metadata and calibration. Upload paths are intentionally not patchable; source and panorama paths can only change through the upload endpoints.
+
 Deleting a character asset is blocked while any character instances in any scene state still use it. Deleting an unused asset removes its GLB file only when that file is safely inside the current project's `models` upload folder.
 
 ## Tests
@@ -267,6 +285,7 @@ Backend:
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH=(Get-Location).Path
 pytest
 python -m compileall app
 ```
@@ -286,9 +305,9 @@ npm run e2e:install
 npm run e2e
 ```
 
-The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server on `127.0.0.1:5174`. It uses isolated local test storage under `frontend/.e2e/`, creates generated image/GLB fixtures at runtime, creates an environment variant, uploads source/panorama files through Environment Builder, verifies prompt copying and activation, verifies the 3D canvas can render/export, checks autosave, reset transform, focus selected, clean screenshot export, JSON/ZIP exports, scene ordering, missing favicon/static resources, and project deletion.
+The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server on `127.0.0.1:5174`. It uses isolated local test storage under `frontend/.e2e/`, clears prior e2e projects at startup, creates generated image/GLB fixtures at runtime, creates an environment variant, uploads source/panorama files through Environment Builder, saves calibration, verifies prompt copying and activation, verifies calibrated character defaults, verifies the 3D canvas can render/export, checks autosave, reset transform, calibrated transform helpers, focus selected, clean screenshot export, JSON/ZIP exports, scene ordering, missing favicon/static resources, and project deletion.
 
-## Milestone 6 Manual Test
+## Milestone 7 Manual Test
 
 1. Start the backend with `uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`.
 2. Start the frontend with `npm run dev`.
@@ -300,24 +319,26 @@ The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server 
 8. Upload a normal source image.
 9. Generate prompts and copy the panorama prompt/manual instructions.
 10. Upload a generated 2:1 panorama image.
-11. Activate the variant and confirm the 360 viewer loads it.
-12. Upload a GLB if needed.
-13. Add a character placement.
-14. Use Reset transform and Focus selected on the character.
-15. Adjust the camera view, Zoom / FOV, or Drone view.
-16. Click `Save camera`.
-17. Fill shot number, shot size, camera move, action notes, and prompt notes; confirm autosave reaches Saved.
-18. Enable Clean export and click `Download screenshot`.
-19. Click `Download scene JSON`.
-20. Copy the image prompt and video prompt.
-21. Duplicate or create a scene state.
-22. Move the character in the duplicated state.
-23. Use Up/Down to reorder scene states.
-24. Switch between states and confirm camera framing and placements change.
-25. Click `Download project package`.
-26. Rename the project and save it.
-27. Delete a disposable project and confirm it returns to the project list.
-28. Run backend tests, frontend build, and e2e.
+11. Set Horizon Y, Floor Y, Placement radius, Default scale, Camera height, and click `Save calibration`.
+12. Toggle calibration guides and confirm the horizon overlay, floor grid, placement circle, and camera-height marker hide/show.
+13. Activate the variant and confirm the 360 viewer loads it.
+14. Upload a GLB if needed.
+15. Add a character placement and confirm it uses the active floor, placement radius, and default scale.
+16. Use Drop to floor, Placement radius, Default scale, Calibrated reset, Reset transform, and Focus selected on the character.
+17. Adjust the camera view, Zoom / FOV, Eye-level, Top-down, and Face selected.
+18. Click `Save camera`.
+19. Fill shot number, shot size, camera move, action notes, and prompt notes; confirm autosave reaches Saved.
+20. Enable Clean export and click `Download screenshot`.
+21. Click `Download scene JSON` and confirm calibration data is present.
+22. Copy the image prompt and video prompt.
+23. Duplicate or create a scene state.
+24. Move the character in the duplicated state.
+25. Use Up/Down to reorder scene states.
+26. Switch between states and confirm camera framing and placements change.
+27. Click `Download project package` and confirm `environment_calibration.json` is included.
+28. Rename the project and save it.
+29. Delete a disposable project and confirm it returns to the project list.
+30. Run backend tests, frontend build, and e2e.
 
 ## Future Module Boundaries
 

@@ -33,6 +33,10 @@ def export_project_package(project_id: int) -> Response:
             "environment_variants.json",
             json.dumps(payload["environment_variants"], indent=2),
         )
+        archive.writestr(
+            "environment_calibration.json",
+            json.dumps(payload["environment_calibration"], indent=2),
+        )
         archive.writestr("scene_states.json", json.dumps(payload["scene_states"], indent=2))
         archive.writestr(
             "character_assets.json",

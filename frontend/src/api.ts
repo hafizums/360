@@ -81,6 +81,14 @@ export type EnvironmentVariant = {
   notes: string;
   width: number;
   height: number;
+  horizon_y: number;
+  floor_y: number;
+  floor_grid_size: number;
+  floor_grid_divisions: number;
+  placement_radius: number;
+  default_character_scale: number;
+  camera_height: number;
+  calibration_notes: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -126,6 +134,14 @@ export type EnvironmentVariantPayload = {
   notes?: string;
   width?: number;
   height?: number;
+  horizon_y?: number;
+  floor_y?: number;
+  floor_grid_size?: number;
+  floor_grid_divisions?: number;
+  placement_radius?: number;
+  default_character_scale?: number;
+  camera_height?: number;
+  calibration_notes?: string;
 };
 
 export type EnvironmentVariantUpdate = Partial<
@@ -140,6 +156,14 @@ export type EnvironmentVariantUpdate = Partial<
     | "notes"
     | "width"
     | "height"
+    | "horizon_y"
+    | "floor_y"
+    | "floor_grid_size"
+    | "floor_grid_divisions"
+    | "placement_radius"
+    | "default_character_scale"
+    | "camera_height"
+    | "calibration_notes"
   >
 >;
 

@@ -465,6 +465,60 @@ def test_update_environment_variant_name_notes_size() -> None:
     assert payload["height"] == 2048
 
 
+def test_update_environment_variant_calibration() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        response = client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={
+                "horizon_y": 0.42,
+                "floor_y": 0.25,
+                "floor_grid_size": 24,
+                "floor_grid_divisions": 12,
+                "placement_radius": 4,
+                "default_character_scale": 1.5,
+                "camera_height": 1.7,
+                "calibration_notes": "  road plane aligned  ",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["horizon_y"] == 0.42
+    assert payload["floor_y"] == 0.25
+    assert payload["floor_grid_size"] == 24
+    assert payload["floor_grid_divisions"] == 12
+    assert payload["placement_radius"] == 4
+    assert payload["default_character_scale"] == 1.5
+    assert payload["camera_height"] == 1.7
+    assert payload["calibration_notes"] == "road plane aligned"
+
+
+def test_reject_invalid_environment_calibration_values() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        low_horizon = client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"horizon_y": -0.1},
+        )
+        zero_radius = client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"placement_radius": 0},
+        )
+        zero_divisions = client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"floor_grid_divisions": 0},
+        )
+
+    assert low_horizon.status_code == 422
+    assert zero_radius.status_code == 422
+    assert zero_divisions.status_code == 422
+
+
 def test_upload_valid_source_image_to_environment_variant() -> None:
     reset_storage()
     with TestClient(app) as client:
@@ -574,6 +628,25 @@ def test_only_one_active_environment_variant_per_project() -> None:
     assert active_ids == [second["id"]]
 
 
+def test_active_environment_calibration_sets_new_character_defaults() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        variant = create_environment_variant(client, project["id"])
+        client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"floor_y": 0.4, "placement_radius": 5, "default_character_scale": 1.8},
+        )
+        client.post(f"/api/projects/{project['id']}/environment-variants/{variant['id']}/activate")
+        asset = upload_character_asset(client, project["id"])
+        instance = create_character_instance(client, project["id"], asset["id"])
+
+    assert instance["position_x"] == 0
+    assert instance["position_y"] == 0.4
+    assert instance["position_z"] == -5
+    assert instance["scale"] == 1.8
+
+
 def test_delete_non_active_environment_variant() -> None:
     reset_storage()
     with TestClient(app) as client:
@@ -622,6 +695,10 @@ def test_project_export_includes_environment_variants() -> None:
     with TestClient(app) as client:
         project = create_project(client)
         variant = create_environment_variant(client, project["id"])
+        client.patch(
+            f"/api/projects/{project['id']}/environment-variants/{variant['id']}",
+            json={"floor_y": 0.35, "placement_radius": 4.5, "camera_height": 1.65},
+        )
         client.post(f"/api/projects/{project['id']}/environment-variants/{variant['id']}/activate")
         response = client.get(f"/api/projects/{project['id']}/export-package")
         scene_state = list_scene_states(client, project["id"])[0]
@@ -630,11 +707,19 @@ def test_project_export_includes_environment_variants() -> None:
         )
 
     assert scene_export.status_code == 200
-    assert scene_export.json()["active_environment_variant"]["id"] == variant["id"]
+    scene_payload = scene_export.json()
+    assert scene_payload["active_environment_variant"]["id"] == variant["id"]
+    assert scene_payload["environment_calibration"]["floor_y"] == 0.35
+    assert scene_payload["environment_calibration"]["placement_radius"] == 4.5
+    assert scene_payload["coordinate_convention"]["floor_y"] == 0.35
+    assert "Environment calibration" in scene_payload["prompts"]["image_reference_prompt"]
     with ZipFile(BytesIO(response.content)) as archive:
         assert "environment_variants.json" in archive.namelist()
+        assert "environment_calibration.json" in archive.namelist()
         variants = archive.read("environment_variants.json").decode("utf-8")
+        calibration = archive.read("environment_calibration.json").decode("utf-8")
     assert "Garden Room" in variants
+    assert '"floor_y": 0.35' in calibration
 
 
 def test_replacing_source_image_removes_previous_uploaded_source_file() -> None:
@@ -1222,6 +1307,8 @@ def test_export_package_contains_expected_files() -> None:
 
     assert {
         "project.json",
+        "environment_calibration.json",
+        "environment_variants.json",
         "scene_states.json",
         "character_assets.json",
         "character_instances.json",

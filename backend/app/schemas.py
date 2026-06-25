@@ -104,6 +104,14 @@ class EnvironmentVariantCreate(BaseModel):
     notes: str = ""
     width: int = Field(default=4096, ge=512, le=12000)
     height: int = Field(default=2048, ge=256, le=12000)
+    horizon_y: float = Field(default=0.5, ge=0, le=1)
+    floor_y: float = 0
+    floor_grid_size: float = Field(default=16, gt=0, le=1000)
+    floor_grid_divisions: int = Field(default=16, ge=1, le=256)
+    placement_radius: float = Field(default=3, gt=0, le=1000)
+    default_character_scale: float = Field(default=1, gt=0, le=1000)
+    camera_height: float = Field(default=1.4, gt=0, le=1000)
+    calibration_notes: str = ""
 
     @field_validator("name", mode="before")
     @classmethod
@@ -112,7 +120,7 @@ class EnvironmentVariantCreate(BaseModel):
             raise ValueError("Environment variant name must be text.")
         return clean_environment_variant_name(value)
 
-    @field_validator("notes", mode="before")
+    @field_validator("notes", "calibration_notes", mode="before")
     @classmethod
     def validate_notes(cls, value: str) -> str:
         if not isinstance(value, str):
@@ -132,6 +140,14 @@ class EnvironmentVariantUpdate(BaseModel):
     notes: str | None = None
     width: int | None = Field(default=None, ge=512, le=12000)
     height: int | None = Field(default=None, ge=256, le=12000)
+    horizon_y: float | None = Field(default=None, ge=0, le=1)
+    floor_y: float | None = None
+    floor_grid_size: float | None = Field(default=None, gt=0, le=1000)
+    floor_grid_divisions: int | None = Field(default=None, ge=1, le=256)
+    placement_radius: float | None = Field(default=None, gt=0, le=1000)
+    default_character_scale: float | None = Field(default=None, gt=0, le=1000)
+    camera_height: float | None = Field(default=None, gt=0, le=1000)
+    calibration_notes: str | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -157,6 +173,7 @@ class EnvironmentVariantUpdate(BaseModel):
         "panorama_prompt",
         "negative_prompt",
         "notes",
+        "calibration_notes",
         mode="before",
     )
     @classmethod
@@ -182,6 +199,14 @@ class EnvironmentVariant(BaseModel):
     notes: str
     width: int
     height: int
+    horizon_y: float
+    floor_y: float
+    floor_grid_size: float
+    floor_grid_divisions: int
+    placement_radius: float
+    default_character_scale: float
+    camera_height: float
+    calibration_notes: str
     is_active: bool
     created_at: datetime
     updated_at: datetime

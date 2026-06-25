@@ -26,14 +26,49 @@ def build_character_summary(instances: list[dict]) -> str:
     )
 
 
-def build_prompts(project: dict, scene_state: dict, instances: list[dict]) -> dict[str, str]:
+def calibration_from_environment(environment_variant: dict | None) -> dict[str, float | int | str] | None:
+    if environment_variant is None:
+        return None
+    return {
+        "horizon_y": environment_variant["horizon_y"],
+        "floor_y": environment_variant["floor_y"],
+        "floor_grid_size": environment_variant["floor_grid_size"],
+        "floor_grid_divisions": environment_variant["floor_grid_divisions"],
+        "placement_radius": environment_variant["placement_radius"],
+        "default_character_scale": environment_variant["default_character_scale"],
+        "camera_height": environment_variant["camera_height"],
+        "calibration_notes": environment_variant["calibration_notes"],
+    }
+
+
+def build_calibration_summary(environment_variant: dict | None) -> str:
+    if environment_variant is None:
+        return "No active environment calibration saved."
+    return (
+        f"Environment calibration: horizon Y {environment_variant['horizon_y']:.2f}, "
+        f"floor Y {environment_variant['floor_y']:.2f}, "
+        f"placement radius {environment_variant['placement_radius']:.2f}, "
+        f"default character scale {environment_variant['default_character_scale']:.2f}, "
+        f"camera height {environment_variant['camera_height']:.2f}. "
+        f"Notes: {environment_variant['calibration_notes'] or 'No calibration notes.'}"
+    )
+
+
+def build_prompts(
+    project: dict,
+    scene_state: dict,
+    instances: list[dict],
+    active_environment_variant: dict | None = None,
+) -> dict[str, str]:
     character_summary = build_character_summary(instances)
+    calibration_summary = build_calibration_summary(active_environment_variant)
     description = scene_state["description"] or "No scene description provided."
     image_prompt = (
         f"Create a cinematic {scene_state['shot_size']} frame inside the provided 360 environment. "
         f"Project: {project['name']}. Shot {scene_state['shot_number']}: {scene_state['name']}. "
         f"Scene description: {description}. Shot size: {scene_state['shot_size']}. "
         f"Camera move: {scene_state['camera_move']}. Camera: FOV {scene_state['camera_fov']:.1f}. "
+        f"{calibration_summary} "
         f"Characters: {character_summary}. "
         f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
         f"Style/notes: {scene_state['prompt_notes'] or 'No extra style notes provided.'}. "
@@ -43,6 +78,7 @@ def build_prompts(project: dict, scene_state: dict, instances: list[dict]) -> di
         f"Generate a short cinematic video for shot {scene_state['shot_number']}: {scene_state['name']}. "
         f"Camera move: {scene_state['camera_move']}. Shot size: {scene_state['shot_size']}. "
         f"Scene description: {description}. "
+        f"{calibration_summary} "
         f"Character blocking: {character_summary}. "
         f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
         "Preserve the same 360 environment, character positions, scale, and orientation unless the action notes specify movement."
@@ -56,6 +92,7 @@ def build_prompts(project: dict, scene_state: dict, instances: list[dict]) -> di
         "video_prompt": video_prompt,
         "negative_consistency_prompt": negative_prompt,
         "character_placement_summary": character_summary,
+        "environment_calibration_summary": calibration_summary,
     }
 
 
@@ -108,7 +145,8 @@ def build_scene_export(project_id: int, scene_state_id: int) -> dict:
         (variant for variant in environment_variants if variant["is_active"]),
         None,
     )
-    prompts = build_prompts(project, scene_state, instances)
+    prompts = build_prompts(project, scene_state, instances, active_environment_variant)
+    environment_calibration = calibration_from_environment(active_environment_variant)
 
     return {
         "project": project,
@@ -116,6 +154,7 @@ def build_scene_export(project_id: int, scene_state_id: int) -> dict:
         "source_image_path": project["source_image_path"],
         "environment_variants": environment_variants,
         "active_environment_variant": active_environment_variant,
+        "environment_calibration": environment_calibration,
         "scene_state": scene_state,
         "camera": {
             "position": {
@@ -134,7 +173,10 @@ def build_scene_export(project_id: int, scene_state_id: int) -> dict:
         "character_instances": instances,
         "coordinate_convention": {
             "up_axis": "y",
-            "floor_y": 0,
+            "floor_y": environment_calibration["floor_y"] if environment_calibration else 0,
+            "placement_radius": (
+                environment_calibration["placement_radius"] if environment_calibration else 2
+            ),
             "rotation_units": "radians",
             "scale": "uniform scalar",
         },
@@ -187,7 +229,12 @@ def build_project_export(project_id: int) -> dict:
             {
                 "scene_state_id": scene_state["id"],
                 "scene_state_name": scene_state["name"],
-                "prompts": build_prompts(project, scene_state, scene_instances),
+                "prompts": build_prompts(
+                    project,
+                    scene_state,
+                    scene_instances,
+                    active_environment_variant,
+                ),
             }
         )
 
@@ -196,6 +243,7 @@ def build_project_export(project_id: int) -> dict:
         "scene_states": scene_states,
         "environment_variants": environment_variants,
         "active_environment_variant": active_environment_variant,
+        "environment_calibration": calibration_from_environment(active_environment_variant),
         "character_assets": assets,
         "character_instances": instances,
         "prompts_by_scene": prompts_by_scene,

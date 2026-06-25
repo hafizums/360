@@ -106,6 +106,14 @@ def build_environment_prompts(project: dict, variant: dict) -> dict[str, str]:
     source = variant["source_image_path"] or "No source image uploaded yet."
     notes = variant["notes"] or "No extra environment notes provided."
     target = f"{variant['width']}x{variant['height']}"
+    calibration = (
+        f"Horizon guide Y: {variant['horizon_y']:.2f}; "
+        f"floor Y: {variant['floor_y']:.2f}; "
+        f"placement radius: {variant['placement_radius']:.2f}; "
+        f"camera height: {variant['camera_height']:.2f}; "
+        f"default character scale: {variant['default_character_scale']:.2f}."
+    )
+    calibration_notes = variant["calibration_notes"] or "No calibration notes provided."
     checklist = "\n".join(
         [
             f"Project: {project['name']}",
@@ -113,6 +121,8 @@ def build_environment_prompts(project: dict, variant: dict) -> dict[str, str]:
             f"Environment variant: {variant['name']}",
             f"Source image: {source}",
             f"User notes: {notes}",
+            f"Calibration: {calibration}",
+            f"Calibration notes: {calibration_notes}",
             "Checklist:",
             "- Identify the main environment type, layout, materials, lighting direction, color palette, and horizon line.",
             "- Preserve recognizable architectural features and avoid changing the location identity.",
@@ -125,7 +135,8 @@ def build_environment_prompts(project: dict, variant: dict) -> dict[str, str]:
         "and perspective cues. Expand unseen left, right, rear, ceiling, and floor areas plausibly. "
         f"Output must be {target}, equirectangular, seamless horizontally, with stable horizon line "
         "and no warped furniture. "
-        f"Project: {project['name']}. Variant: {variant['name']}. Notes: {notes}."
+        f"Project: {project['name']}. Variant: {variant['name']}. Notes: {notes}. "
+        f"Placement calibration to preserve: {calibration} Calibration notes: {calibration_notes}."
     )
     negative_prompt = (
         "No duplicated doors/windows, no distorted perspective, no broken ceiling/floor, "
@@ -162,10 +173,38 @@ def create_environment_variant(project_id: int, payload: EnvironmentVariantCreat
     with db_session() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO environment_variants (project_id, name, notes, width, height)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO environment_variants (
+                project_id,
+                name,
+                notes,
+                width,
+                height,
+                horizon_y,
+                floor_y,
+                floor_grid_size,
+                floor_grid_divisions,
+                placement_radius,
+                default_character_scale,
+                camera_height,
+                calibration_notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (project_id, payload.name, payload.notes, payload.width, payload.height),
+            (
+                project_id,
+                payload.name,
+                payload.notes,
+                payload.width,
+                payload.height,
+                payload.horizon_y,
+                payload.floor_y,
+                payload.floor_grid_size,
+                payload.floor_grid_divisions,
+                payload.placement_radius,
+                payload.default_character_scale,
+                payload.camera_height,
+                payload.calibration_notes,
+            ),
         )
         row = conn.execute(
             "SELECT * FROM environment_variants WHERE id = ?",
@@ -201,6 +240,14 @@ def update_environment_variant(
             "notes",
             "width",
             "height",
+            "horizon_y",
+            "floor_y",
+            "floor_grid_size",
+            "floor_grid_divisions",
+            "placement_radius",
+            "default_character_scale",
+            "camera_height",
+            "calibration_notes",
         }
     ]
     if fields:

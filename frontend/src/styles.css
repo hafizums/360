@@ -282,6 +282,17 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 }
 .viewer-reset:hover{background:rgba(70,70,70,0.92);color:#fff}
 
+.horizon-guide{
+  position:absolute;left:0;right:0;height:0;z-index:9;pointer-events:none;
+  border-top:1px solid rgba(212,169,66,0.9);
+  box-shadow:0 0 0 1px rgba(0,0,0,0.18),0 0 12px rgba(212,169,66,0.18);
+}
+.horizon-guide span{
+  position:absolute;right:8px;top:-10px;
+  color:#f0cf74;background:rgba(0,0,0,0.55);border:1px solid rgba(212,169,66,0.25);
+  border-radius:var(--r);font-size:0.48rem;font-weight:600;padding:1px 4px;text-transform:uppercase;
+}
+
 .viewer-statusbar{
   flex-shrink:0;min-height:20px;
   align-items:center;background:var(--chrome-bg);border-top:1px solid var(--line-hard);
@@ -316,7 +327,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 /* ═══ INSPECTOR DOCK ═══ */
 .inspector-tabs{
   background:#2e2e2e;border-bottom:1px solid var(--line-hard);
-  display:grid;gap:0;grid-template-columns:repeat(4,minmax(0,1fr));padding:0;
+  display:grid;gap:0;grid-template-columns:repeat(5,minmax(0,1fr));padding:0;
 }
 .inspector-tabs button{
   background:transparent;border:0;border-radius:0;border-right:1px solid var(--line-hard);
@@ -329,6 +340,11 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 
 .inspector-scroll{align-content:start;display:grid;gap:4px;min-height:0;overflow:auto;padding:4px}
 .upload-panel{display:grid;gap:6px}
+.calibration-panel{
+  background:var(--panel-bg-soft);border:1px solid var(--line-soft);
+  border-radius:var(--r);display:grid;gap:5px;padding:6px;
+}
+.compact-heading{margin-bottom:0}
 
 .prompt-block{display:grid;gap:3px}
 .prompt-heading{display:flex;align-items:center;gap:4px;justify-content:space-between}

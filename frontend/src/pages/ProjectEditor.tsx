@@ -15,17 +15,29 @@ import {
   SceneStateUpdate,
   ShotSize,
 } from "../api";
-import PanoramaViewer, { PanoramaViewerHandle, TransformMode } from "../components/PanoramaViewer";
+import PanoramaViewer, {
+  EnvironmentCalibration,
+  PanoramaViewerHandle,
+  TransformMode,
+} from "../components/PanoramaViewer";
 import UploadPanel from "../components/UploadPanel";
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
 const CAMERA_FOV_MIN = 20;
 const CAMERA_FOV_MAX = 120;
-const DRONE_CAMERA_SNAPSHOT: CameraSnapshot = {
-  position: { x: 0, y: 7, z: 0.01 },
-  target: { x: 0, y: 0, z: 0 },
-  fov: 55,
+const DEFAULT_ENVIRONMENT_CALIBRATION: EnvironmentCalibration & {
+  default_character_scale: number;
+  calibration_notes: string;
+} = {
+  horizon_y: 0.5,
+  floor_y: 0,
+  floor_grid_size: 16,
+  floor_grid_divisions: 16,
+  placement_radius: 3,
+  default_character_scale: 1,
+  camera_height: 1.4,
+  calibration_notes: "",
 };
 const SHOT_SIZES: ShotSize[] = ["WIDE", "MS", "CU", "ECU"];
 const CAMERA_MOVES: CameraMove[] = [
@@ -74,6 +86,7 @@ export default function ProjectEditor() {
   const [exportBusy, setExportBusy] = useState(false);
   const [panelsCollapsed, setPanelsCollapsed] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
+  const [showCalibrationGuide, setShowCalibrationGuide] = useState(true);
   const [cleanExport, setCleanExport] = useState(true);
   const [activeInspectorTab, setActiveInspectorTab] = useState<InspectorTab>("setup");
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +149,10 @@ export default function ProjectEditor() {
     sceneStates.find((state) => state.id === selectedSceneStateId) ?? null;
   const selectedEnvironmentVariant =
     environmentVariants.find((variant) => variant.id === selectedEnvironmentVariantId) ?? null;
+  const activeEnvironmentVariant =
+    environmentVariants.find((variant) => variant.is_active) ?? null;
+  const activeCalibration = environmentCalibrationFromVariant(activeEnvironmentVariant);
+  const selectedCalibration = environmentCalibrationFromVariant(selectedEnvironmentVariant);
 
   useEffect(() => {
     if (sceneSaveStatus !== "unsaved" || !selectedSceneState) {
@@ -192,7 +209,7 @@ export default function ProjectEditor() {
   const sourceUrl = assetUrl(project.source_image_path);
   const panoramaUrl = assetUrl(project.panorama_image_path);
   const prompts = selectedSceneState
-    ? buildPrompts(activeProject, selectedSceneState, instances)
+    ? buildPrompts(activeProject, selectedSceneState, instances, activeEnvironmentVariant)
     : null;
   const cameraSnapshot = selectedSceneState
     ? sceneStateCameraSnapshot(selectedSceneState)
@@ -606,6 +623,51 @@ export default function ProjectEditor() {
     await persistInstance(selectedInstance.id, patch);
   }
 
+  async function patchSelectedTransform(patch: CharacterInstanceUpdate) {
+    if (!selectedInstance) {
+      return;
+    }
+    mergeInstance(selectedInstance.id, patch);
+    await persistInstance(selectedInstance.id, patch);
+  }
+
+  async function dropSelectedToFloor() {
+    await patchSelectedTransform({ position_y: activeCalibration.floor_y });
+  }
+
+  async function moveSelectedToPlacementRadius() {
+    if (!selectedInstance) {
+      return;
+    }
+    const radius = activeCalibration.placement_radius;
+    const length = Math.hypot(selectedInstance.position_x, selectedInstance.position_z);
+    const patch =
+      length > 0.001
+        ? {
+            position_x: round((selectedInstance.position_x / length) * radius),
+            position_z: round((selectedInstance.position_z / length) * radius),
+          }
+        : { position_x: 0, position_z: -radius };
+    await patchSelectedTransform(patch);
+  }
+
+  async function applyDefaultScaleToSelected() {
+    await patchSelectedTransform({ scale: activeCalibration.default_character_scale });
+  }
+
+  async function resetSelectedToCalibratedDefault() {
+    const patch: CharacterInstanceUpdate = {
+      position_x: 0,
+      position_y: activeCalibration.floor_y,
+      position_z: -activeCalibration.placement_radius,
+      rotation_x: 0,
+      rotation_y: 0,
+      rotation_z: 0,
+      scale: activeCalibration.default_character_scale,
+    };
+    await patchSelectedTransform(patch);
+  }
+
   function focusSelectedInstance() {
     if (!selectedInstance) {
       return;
@@ -617,6 +679,49 @@ export default function ProjectEditor() {
     });
   }
 
+  function applyEyeLevelCamera() {
+    applyCameraSnapshotToSelectedSceneState({
+      position: { x: 0, y: activeCalibration.camera_height, z: 0.2 },
+      target: { x: 0, y: activeCalibration.camera_height, z: -activeCalibration.placement_radius },
+      fov: cameraSnapshot.fov,
+    });
+  }
+
+  function applyTopDownCamera() {
+    applyCameraSnapshotToSelectedSceneState({
+      position: {
+        x: 0,
+        y: Math.max(activeCalibration.camera_height + 3, activeCalibration.floor_y + 7),
+        z: 0.01,
+      },
+      target: { x: 0, y: activeCalibration.floor_y, z: 0 },
+      fov: 55,
+    });
+  }
+
+  function faceSelectedWithCamera() {
+    if (!selectedInstance) {
+      return;
+    }
+    const length = Math.hypot(selectedInstance.position_x, selectedInstance.position_z);
+    const directionX = length > 0.001 ? selectedInstance.position_x / length : 0;
+    const directionZ = length > 0.001 ? selectedInstance.position_z / length : -1;
+    const cameraDistance = Math.max(1.5, activeCalibration.placement_radius * 0.45);
+    applyCameraSnapshotToSelectedSceneState({
+      position: {
+        x: selectedInstance.position_x - directionX * cameraDistance,
+        y: activeCalibration.camera_height,
+        z: selectedInstance.position_z - directionZ * cameraDistance,
+      },
+      target: {
+        x: selectedInstance.position_x,
+        y: selectedInstance.position_y + activeCalibration.camera_height * 0.65,
+        z: selectedInstance.position_z,
+      },
+      fov: cameraSnapshot.fov,
+    });
+  }
+
   async function downloadScreenshot() {
     if (!selectedSceneState) {
       return;
@@ -624,9 +729,15 @@ export default function ProjectEditor() {
     setExportBusy(true);
     setExportStatus(null);
     const restoreGuides = cleanExport && showGuide;
+    const restoreCalibrationGuides = cleanExport && showCalibrationGuide;
     try {
       if (restoreGuides) {
         setShowGuide(false);
+      }
+      if (restoreCalibrationGuides) {
+        setShowCalibrationGuide(false);
+      }
+      if (restoreGuides || restoreCalibrationGuides) {
         await waitForViewerFrame();
       }
       const dataUrl = viewerRef.current?.captureScreenshot();
@@ -642,6 +753,9 @@ export default function ProjectEditor() {
     } finally {
       if (restoreGuides) {
         setShowGuide(true);
+      }
+      if (restoreCalibrationGuides) {
+        setShowCalibrationGuide(true);
       }
       setExportBusy(false);
     }
@@ -768,6 +882,15 @@ export default function ProjectEditor() {
     );
   }
 
+  function mergeSelectedEnvironmentVariant(patch: Partial<EnvironmentVariant>) {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    replaceEnvironmentVariant({ ...selectedEnvironmentVariant, ...patch });
+    setEnvironmentStatus("Calibration unsaved.");
+    setEnvironmentError(null);
+  }
+
   async function createEnvironmentVariant() {
     setEnvironmentBusy(true);
     setEnvironmentError(null);
@@ -809,6 +932,45 @@ export default function ProjectEditor() {
     } catch (err) {
       setEnvironmentError(err instanceof Error ? err.message : "Could not save environment.");
     }
+  }
+
+  async function saveSelectedEnvironmentCalibration(
+    patchOverride?: Partial<EnvironmentVariant>,
+  ) {
+    if (!selectedEnvironmentVariant) {
+      return;
+    }
+    const source = { ...selectedEnvironmentVariant, ...patchOverride };
+    const patch = {
+      horizon_y: source.horizon_y,
+      floor_y: source.floor_y,
+      floor_grid_size: source.floor_grid_size,
+      floor_grid_divisions: Math.round(source.floor_grid_divisions),
+      placement_radius: source.placement_radius,
+      default_character_scale: source.default_character_scale,
+      camera_height: source.camera_height,
+      calibration_notes: source.calibration_notes,
+    };
+    replaceEnvironmentVariant({ ...selectedEnvironmentVariant, ...patch });
+    setEnvironmentBusy(true);
+    setEnvironmentError(null);
+    try {
+      const updated = await api.updateEnvironmentVariant(
+        activeProject.id,
+        selectedEnvironmentVariant.id,
+        patch,
+      );
+      replaceEnvironmentVariant(updated);
+      setEnvironmentStatus("Calibration saved.");
+    } catch (err) {
+      setEnvironmentError(err instanceof Error ? err.message : "Could not save calibration.");
+    } finally {
+      setEnvironmentBusy(false);
+    }
+  }
+
+  async function resetSelectedEnvironmentCalibration() {
+    await saveSelectedEnvironmentCalibration(DEFAULT_ENVIRONMENT_CALIBRATION);
   }
 
   async function handleEnvironmentSourceUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -1083,6 +1245,8 @@ export default function ProjectEditor() {
               onTransformCommit={persistInstance}
               cameraSnapshot={cameraSnapshot}
               showGuide={showGuide}
+              showCalibrationGuide={showCalibrationGuide}
+              calibration={activeCalibration}
               viewerRef={viewerRef}
             />
           </div>
@@ -1091,6 +1255,7 @@ export default function ProjectEditor() {
         <div className="viewer-statusbar">
           <span>View 100%</span>
           <span>{showGuide ? "Guides on" : "Guides off"}</span>
+          <span>{showCalibrationGuide ? "Calibration on" : "Calibration off"}</span>
           <span>{instances.length} objects</span>
           <span>{panoramaUrl ? "Equirectangular texture active" : "Upload a panorama to preview"}</span>
         </div>
@@ -1292,6 +1457,121 @@ export default function ProjectEditor() {
                         void updateSelectedEnvironmentVariant({ height: Math.round(value) })
                       }
                     />
+                  </div>
+                  <div className="calibration-panel" data-testid="calibration-panel">
+                    <div className="panel-heading compact-heading">
+                      <h2>Calibration</h2>
+                      <label className="inline-check">
+                        <input
+                          type="checkbox"
+                          checked={showCalibrationGuide}
+                          onChange={(event) => setShowCalibrationGuide(event.target.checked)}
+                        />
+                        Show guides
+                      </label>
+                    </div>
+                    <label>
+                      Horizon Y
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={selectedCalibration.horizon_y}
+                        data-testid="horizon-y"
+                        onChange={(event) =>
+                          mergeSelectedEnvironmentVariant({
+                            horizon_y: Number(event.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    <div className="field-grid">
+                      <NumberField
+                        label="Floor Y"
+                        value={selectedCalibration.floor_y}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({ floor_y: value })
+                        }
+                      />
+                      <NumberField
+                        label="Grid size"
+                        min={1}
+                        max={1000}
+                        value={selectedCalibration.floor_grid_size}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({ floor_grid_size: value })
+                        }
+                      />
+                      <NumberField
+                        label="Grid divisions"
+                        min={1}
+                        max={256}
+                        value={selectedCalibration.floor_grid_divisions}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({
+                            floor_grid_divisions: Math.round(value),
+                          })
+                        }
+                      />
+                      <NumberField
+                        label="Placement radius"
+                        min={0.01}
+                        max={1000}
+                        value={selectedCalibration.placement_radius}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({ placement_radius: value })
+                        }
+                      />
+                      <NumberField
+                        label="Default scale"
+                        min={0.01}
+                        max={1000}
+                        value={selectedCalibration.default_character_scale}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({ default_character_scale: value })
+                        }
+                      />
+                      <NumberField
+                        label="Camera height"
+                        min={0.01}
+                        max={1000}
+                        value={selectedCalibration.camera_height}
+                        onChange={(value) =>
+                          mergeSelectedEnvironmentVariant({ camera_height: value })
+                        }
+                      />
+                    </div>
+                    <label>
+                      Calibration notes
+                      <textarea
+                        rows={3}
+                        value={selectedEnvironmentVariant.calibration_notes}
+                        onChange={(event) =>
+                          mergeSelectedEnvironmentVariant({
+                            calibration_notes: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <div className="row-actions full-width">
+                      <button
+                        type="button"
+                        disabled={environmentBusy}
+                        data-testid="save-calibration"
+                        onClick={() => void saveSelectedEnvironmentCalibration()}
+                      >
+                        Save calibration
+                      </button>
+                      <button
+                        type="button"
+                        disabled={environmentBusy}
+                        data-testid="reset-calibration"
+                        onClick={() => void resetSelectedEnvironmentCalibration()}
+                      >
+                        Reset calibration
+                      </button>
+                    </div>
                   </div>
                   <div className="row-actions full-width">
                     <input
@@ -1539,10 +1819,25 @@ export default function ProjectEditor() {
               <div className="row-actions full-width">
                 <button
                   type="button"
-                  data-testid="drone-view"
-                  onClick={() => applyCameraSnapshotToSelectedSceneState(DRONE_CAMERA_SNAPSHOT)}
+                  data-testid="eye-level-camera"
+                  onClick={applyEyeLevelCamera}
                 >
-                  Drone view
+                  Eye-level
+                </button>
+                <button
+                  type="button"
+                  data-testid="top-down-camera"
+                  onClick={applyTopDownCamera}
+                >
+                  Top-down
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedInstance}
+                  data-testid="face-selected-camera"
+                  onClick={faceSelectedWithCamera}
+                >
+                  Face selected
                 </button>
                 <button
                   type="button"
@@ -1648,6 +1943,34 @@ export default function ProjectEditor() {
                       onClick={() => void resetSelectedTransform()}
                     >
                       Reset transform
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="drop-to-floor"
+                      onClick={() => void dropSelectedToFloor()}
+                    >
+                      Drop to floor
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="move-to-radius"
+                      onClick={() => void moveSelectedToPlacementRadius()}
+                    >
+                      Placement radius
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="apply-default-scale"
+                      onClick={() => void applyDefaultScaleToSelected()}
+                    >
+                      Default scale
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="reset-calibrated-transform"
+                      onClick={() => void resetSelectedToCalibratedDefault()}
+                    >
+                      Calibrated reset
                     </button>
                     <button
                       type="button"
@@ -1976,12 +2299,36 @@ function cameraSnapshotPatch(snapshot: CameraSnapshot): SceneStateUpdate {
   };
 }
 
+function environmentCalibrationFromVariant(
+  variant: EnvironmentVariant | null,
+): EnvironmentCalibration {
+  return {
+    horizon_y: variant?.horizon_y ?? DEFAULT_ENVIRONMENT_CALIBRATION.horizon_y,
+    floor_y: variant?.floor_y ?? DEFAULT_ENVIRONMENT_CALIBRATION.floor_y,
+    floor_grid_size:
+      variant?.floor_grid_size ?? DEFAULT_ENVIRONMENT_CALIBRATION.floor_grid_size,
+    floor_grid_divisions:
+      variant?.floor_grid_divisions ?? DEFAULT_ENVIRONMENT_CALIBRATION.floor_grid_divisions,
+    placement_radius:
+      variant?.placement_radius ?? DEFAULT_ENVIRONMENT_CALIBRATION.placement_radius,
+    default_character_scale:
+      variant?.default_character_scale ??
+      DEFAULT_ENVIRONMENT_CALIBRATION.default_character_scale,
+    camera_height: variant?.camera_height ?? DEFAULT_ENVIRONMENT_CALIBRATION.camera_height,
+  };
+}
+
 function buildPrompts(
   project: Project,
   sceneState: SceneState,
   instances: CharacterInstance[],
+  environmentVariant: EnvironmentVariant | null,
 ) {
   const summary = buildCharacterSummary(instances);
+  const calibration = environmentCalibrationFromVariant(environmentVariant);
+  const calibrationSummary = environmentVariant
+    ? `Environment calibration: horizon Y ${round(calibration.horizon_y)}, floor Y ${round(calibration.floor_y)}, placement radius ${round(calibration.placement_radius)}, default scale ${round(calibration.default_character_scale)}, camera height ${round(calibration.camera_height)}. ${environmentVariant.calibration_notes.trim() || "No calibration notes."}`
+    : "No active environment calibration saved.";
   const action = sceneState.action_notes.trim() || "No action notes provided.";
   const notes = sceneState.prompt_notes.trim() || "No extra style notes provided.";
   const description = sceneState.description.trim() || "No scene description provided.";
@@ -1993,6 +2340,7 @@ function buildPrompts(
     `Shot size: ${sceneState.shot_size}.`,
     `Camera move: ${sceneState.camera_move}.`,
     `Camera: FOV ${round(sceneState.camera_fov)}.`,
+    calibrationSummary,
     `Characters: ${summary}.`,
     `Action: ${action}.`,
     `Style/notes: ${notes}.`,
@@ -2003,6 +2351,7 @@ function buildPrompts(
     `Camera move: ${sceneState.camera_move}.`,
     `Shot size: ${sceneState.shot_size}.`,
     `Scene description: ${description}.`,
+    calibrationSummary,
     `Character blocking: ${summary}.`,
     `Action: ${action}.`,
     "Preserve the same 360 environment, character positions, scale, and orientation unless the action notes specify movement.",

@@ -110,6 +110,14 @@ def init_db() -> None:
                 notes TEXT NOT NULL DEFAULT '',
                 width INTEGER NOT NULL DEFAULT 4096,
                 height INTEGER NOT NULL DEFAULT 2048,
+                horizon_y REAL NOT NULL DEFAULT 0.5,
+                floor_y REAL NOT NULL DEFAULT 0,
+                floor_grid_size REAL NOT NULL DEFAULT 16,
+                floor_grid_divisions INTEGER NOT NULL DEFAULT 16,
+                placement_radius REAL NOT NULL DEFAULT 3,
+                default_character_scale REAL NOT NULL DEFAULT 1,
+                camera_height REAL NOT NULL DEFAULT 1.4,
+                calibration_notes TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -130,6 +138,39 @@ def init_db() -> None:
         add_column_if_missing(conn, "scene_states", "camera_target_y", "REAL NOT NULL DEFAULT 1.4")
         add_column_if_missing(conn, "scene_states", "camera_target_z", "REAL NOT NULL DEFAULT -2")
         add_column_if_missing(conn, "scene_states", "camera_fov", "REAL NOT NULL DEFAULT 75")
+        add_column_if_missing(conn, "environment_variants", "horizon_y", "REAL NOT NULL DEFAULT 0.5")
+        add_column_if_missing(conn, "environment_variants", "floor_y", "REAL NOT NULL DEFAULT 0")
+        add_column_if_missing(conn, "environment_variants", "floor_grid_size", "REAL NOT NULL DEFAULT 16")
+        add_column_if_missing(
+            conn,
+            "environment_variants",
+            "floor_grid_divisions",
+            "INTEGER NOT NULL DEFAULT 16",
+        )
+        add_column_if_missing(
+            conn,
+            "environment_variants",
+            "placement_radius",
+            "REAL NOT NULL DEFAULT 3",
+        )
+        add_column_if_missing(
+            conn,
+            "environment_variants",
+            "default_character_scale",
+            "REAL NOT NULL DEFAULT 1",
+        )
+        add_column_if_missing(
+            conn,
+            "environment_variants",
+            "camera_height",
+            "REAL NOT NULL DEFAULT 1.4",
+        )
+        add_column_if_missing(
+            conn,
+            "environment_variants",
+            "calibration_notes",
+            "TEXT NOT NULL DEFAULT ''",
+        )
         ensure_default_scene_states(conn)
         ensure_default_environment_variants(conn)
 

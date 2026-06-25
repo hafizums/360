@@ -2,7 +2,7 @@ import { OrbitControls, TransformControls, useGLTF } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { Ref, RefObject } from "react";
-import { BackSide, Group, PerspectiveCamera, TextureLoader } from "three";
+import { BackSide, DoubleSide, Group, PerspectiveCamera, TextureLoader } from "three";
 import {
   CharacterAsset,
   CharacterInstance,
@@ -13,6 +13,16 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 export type TransformMode = "translate" | "rotate" | "scale";
+
+export type EnvironmentCalibration = {
+  horizon_y: number;
+  floor_y: number;
+  floor_grid_size: number;
+  floor_grid_divisions: number;
+  placement_radius: number;
+  default_character_scale: number;
+  camera_height: number;
+};
 
 type PanoramaViewerProps = {
   imageUrl: string | null;
@@ -25,6 +35,8 @@ type PanoramaViewerProps = {
   onTransformCommit: (instanceId: number, patch: CharacterInstanceUpdate) => void;
   cameraSnapshot: CameraSnapshot;
   showGuide: boolean;
+  showCalibrationGuide: boolean;
+  calibration: EnvironmentCalibration;
   viewerRef?: Ref<PanoramaViewerHandle>;
 };
 
@@ -156,6 +168,8 @@ function ViewerScene({
   onTransformCommit,
   cameraSnapshot,
   showGuide,
+  showCalibrationGuide,
+  calibration,
   controlsRef,
 }: ViewerSceneProps) {
   const [orbitEnabled, setOrbitEnabled] = useState(true);
@@ -222,8 +236,39 @@ function ViewerScene({
       </Suspense>
       <ambientLight intensity={0.9} />
       <directionalLight intensity={1.1} position={[4, 6, 3]} />
-      {showGuide ? (
-        <gridHelper args={[16, 16, "#2d8cff", "#363f4c"]} position={[0, 0, 0]} />
+      {showGuide && showCalibrationGuide ? (
+        <>
+          <gridHelper
+            args={[
+              calibration.floor_grid_size,
+              calibration.floor_grid_divisions,
+              "#2d8cff",
+              "#363f4c",
+            ]}
+            position={[0, calibration.floor_y, 0]}
+          />
+          <mesh
+            position={[0, calibration.floor_y + 0.015, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <ringGeometry
+              args={[
+                Math.max(0.01, calibration.placement_radius - 0.015),
+                calibration.placement_radius + 0.015,
+                128,
+              ]}
+            />
+            <meshBasicMaterial color="#d4a942" side={DoubleSide} transparent opacity={0.9} />
+          </mesh>
+          <mesh position={[0, calibration.floor_y + calibration.camera_height / 2, 0]}>
+            <boxGeometry args={[0.035, calibration.camera_height, 0.035]} />
+            <meshBasicMaterial color="#7ec8ff" transparent opacity={0.7} />
+          </mesh>
+          <mesh position={[0, calibration.floor_y + calibration.camera_height, 0]}>
+            <sphereGeometry args={[0.09, 16, 12]} />
+            <meshBasicMaterial color="#7ec8ff" transparent opacity={0.85} />
+          </mesh>
+        </>
       ) : null}
       <OrbitControls
         ref={controlsRef}
@@ -249,6 +294,8 @@ export default function PanoramaViewer({
   onTransformCommit,
   cameraSnapshot,
   showGuide,
+  showCalibrationGuide,
+  calibration,
   viewerRef,
 }: PanoramaViewerProps) {
   const [viewerKey, setViewerKey] = useState(0);
@@ -333,9 +380,21 @@ export default function PanoramaViewer({
           onTransformCommit={onTransformCommit}
           cameraSnapshot={cameraSnapshot}
           showGuide={showGuide}
+          showCalibrationGuide={showCalibrationGuide}
+          calibration={calibration}
           controlsRef={controlsRef}
         />
       </Canvas>
+      {showGuide && showCalibrationGuide ? (
+        <div
+          className="horizon-guide"
+          style={{
+            top: `${Math.min(100, Math.max(0, calibration.horizon_y * 100))}%`,
+          }}
+        >
+          <span>Horizon</span>
+        </div>
+      ) : null}
     </div>
   );
 }

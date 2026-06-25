@@ -248,12 +248,47 @@ def create_character_instance(project_id: int, payload: CharacterInstanceCreate)
     instance_name = payload.name or asset["name"]
 
     with db_session() as conn:
+        active_environment = conn.execute(
+            """
+            SELECT floor_y, placement_radius, default_character_scale
+            FROM environment_variants
+            WHERE project_id = ? AND is_active = 1
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+        position_y = active_environment["floor_y"] if active_environment is not None else 0
+        position_z = (
+            -active_environment["placement_radius"] if active_environment is not None else -2
+        )
+        scale = (
+            active_environment["default_character_scale"]
+            if active_environment is not None
+            else 1
+        )
         cursor = conn.execute(
             """
-            INSERT INTO character_instances (project_id, scene_state_id, character_asset_id, name)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO character_instances (
+                project_id,
+                scene_state_id,
+                character_asset_id,
+                name,
+                position_y,
+                position_z,
+                scale
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (project_id, scene_state_id, payload.character_asset_id, instance_name),
+            (
+                project_id,
+                scene_state_id,
+                payload.character_asset_id,
+                instance_name,
+                position_y,
+                position_z,
+                scale,
+            ),
         )
         row = conn.execute(
             "SELECT * FROM character_instances WHERE id = ?",

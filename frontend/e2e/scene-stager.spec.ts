@@ -35,6 +35,7 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
     }
   });
 
+  await deleteAllProjects();
   await page.goto("/");
   await page.getByLabel("Name").fill(projectName);
   await page.getByLabel("Description").fill("Playwright coverage for the 3D editor flow.");
@@ -56,12 +57,21 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
     .toContain("Create a seamless 2:1 equirectangular 360 panorama");
   await uploadWithButton(page, "Upload panorama", panoramaPath);
   await expect(page.getByText("Panorama uploaded.")).toBeVisible();
+  await page.getByLabel("Floor Y").fill("0.25");
+  await page.getByLabel("Placement radius").fill("4");
+  await page.getByLabel("Default scale").fill("1.5");
+  await page.getByLabel("Camera height").fill("1.7");
+  await page.getByTestId("save-calibration").click();
+  await expect(page.getByText("Calibration saved.")).toBeVisible();
   await page.getByTestId("activate-environment-variant").click();
   await expect(page.getByText("Environment activated.")).toBeVisible();
   const activeEnvironment = (await listEnvironmentVariants(projectId)).find(
     (variant) => variant.is_active,
   );
   expect(activeEnvironment?.panorama_image_path).toBeTruthy();
+  expect(activeEnvironment?.floor_y).toBe(0.25);
+  expect(activeEnvironment?.placement_radius).toBe(4);
+  expect(activeEnvironment?.default_character_scale).toBe(1.5);
   await expect(page.getByText("Texture loaded")).toBeVisible();
   const canvas = page.locator("canvas");
   await expect(canvas).toBeVisible();
@@ -82,12 +92,29 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
     .toBe(1);
   await expect(page.getByLabel("Selected object transform")).toBeVisible();
   await expect.poll(() => floatingTransformIsInViewer(page)).toBe(true);
+  await expect(page.getByLabel("Height")).toHaveValue("0.25");
+  await expect(page.getByLabel("Depth")).toHaveValue("-4");
+  await expect(transformScaleInput(page)).toHaveValue("1.5");
+  await page.getByLabel("Height").fill("1.2");
+  await page.getByTestId("drop-to-floor").click();
+  await expect(page.getByLabel("Height")).toHaveValue("0.25");
+  await page.getByLabel("Depth").fill("-1");
+  await page.getByTestId("move-to-radius").click();
+  await expect(page.getByLabel("Depth")).toHaveValue("-4");
+  await transformScaleInput(page).fill("0.6");
+  await page.getByTestId("apply-default-scale").click();
+  await expect(transformScaleInput(page)).toHaveValue("1.5");
+  await page.getByLabel("Left/Right").fill("2");
+  await page.getByTestId("reset-calibrated-transform").click();
+  await expect(page.getByLabel("Left/Right")).toHaveValue("0");
+  await expect(page.getByLabel("Height")).toHaveValue("0.25");
+  await expect(page.getByLabel("Depth")).toHaveValue("-4");
 
   await inspectorTab(page, "Shot").click();
   await dragCanvas(page);
   await page.getByLabel("Shot #").fill("7");
   await page.getByLabel("Shot size").selectOption("CU");
-  await selectNativeOption(page, "Camera move", "orbit");
+  await page.getByLabel("Camera move").selectOption("orbit");
   await expect(page.getByLabel("Camera move")).toHaveValue("orbit");
   await page.getByLabel("Zoom / FOV").fill("45");
   await page.getByLabel("Action notes").fill("Character turns toward the window.");
@@ -96,7 +123,8 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
   await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
   await page.getByTestId("save-scene-state").click();
   await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
-  await page.getByTestId("drone-view").click();
+  await expect.poll(() => firstSceneState(projectId).then((item) => item.camera_move)).toBe("orbit");
+  await page.getByTestId("top-down-camera").click();
   await expect(page.getByLabel("Zoom / FOV")).toHaveValue("55");
   await page.getByTestId("save-camera").click();
 
@@ -104,8 +132,8 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
   expect(state.shot_number).toBe(7);
   expect(state.shot_size).toBe("CU");
   expect(state.camera_move).toBe("orbit");
-  expect(state.camera_position_y).toBe(7);
-  expect(state.camera_target_y).toBe(0);
+  expect(state.camera_position_y).toBe(7.25);
+  expect(state.camera_target_y).toBe(0.25);
   expect(state.camera_fov).toBe(55);
   expect(state.action_notes).toBe("Character turns toward the window.");
   expect(state.prompt_notes).toBe("Moody practical lighting, consistent layout.");
@@ -134,12 +162,15 @@ test("milestone 6 environment builder flow survives real browser use", async ({ 
     `${API_BASE_URL}/api/projects/${projectId}/scene-states/${state.id}/export-json`,
   );
   expect(sceneExport.scene_state.shot_size).toBe("CU");
-  expect(sceneExport.camera.position.y).toBe(7);
-  expect(sceneExport.camera.target.y).toBe(0);
+  expect(sceneExport.camera.position.y).toBe(7.25);
+  expect(sceneExport.camera.target.y).toBe(0.25);
   expect(sceneExport.camera.fov).toBe(55);
   expect(sceneExport.active_environment_variant.id).toBe(activeEnvironment?.id);
+  expect(sceneExport.environment_calibration.floor_y).toBe(0.25);
+  expect(sceneExport.environment_calibration.placement_radius).toBe(4);
   expect(sceneExport.character_instances).toHaveLength(1);
   expect(sceneExport.prompts.image_reference_prompt).toContain("Shot 7");
+  expect(sceneExport.prompts.image_reference_prompt).toContain("Environment calibration");
   expect(sceneExport.prompts.image_reference_prompt).toContain("Camera move: orbit");
   expect(sceneExport.prompts.image_reference_prompt).toContain("e2e-character");
 
@@ -233,17 +264,6 @@ function inspectorTab(page: Page, name: string) {
   return page.locator(".inspector-tabs").getByRole("button", { name, exact: true });
 }
 
-async function selectNativeOption(page: Page, label: string, value: string) {
-  await page.getByLabel(label).evaluate(
-    (element, nextValue) => {
-      const select = element as HTMLSelectElement;
-      select.value = nextValue;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    },
-    value,
-  );
-}
-
 async function dragCanvas(page: Page) {
   const box = await page.locator("canvas").boundingBox();
   expect(box).not.toBeNull();
@@ -279,9 +299,25 @@ async function floatingTransformIsInViewer(page: Page) {
   });
 }
 
+function transformScaleInput(page: Page) {
+  return page
+    .locator(".floating-transform-panel .options-group")
+    .filter({ hasText: "Scale" })
+    .getByRole("textbox");
+}
+
 async function firstSceneState(projectId: number) {
   const states = await listSceneStates(projectId);
   return states[0];
+}
+
+async function deleteAllProjects() {
+  const projects = await fetchJson(`${API_BASE_URL}/api/projects`);
+  await Promise.all(
+    projects.map((project: { id: number }) =>
+      fetch(`${API_BASE_URL}/api/projects/${project.id}`, { method: "DELETE" }),
+    ),
+  );
 }
 
 async function listSceneStates(projectId: number) {
