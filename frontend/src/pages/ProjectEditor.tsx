@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   assetUrl,
@@ -38,13 +38,18 @@ const CAMERA_MOVES: CameraMove[] = [
   "zoom",
 ];
 type InspectorTab = "setup" | "shot" | "characters" | "export";
+type SaveStatus = "saved" | "unsaved" | "saving" | "error";
 
 export default function ProjectEditor() {
+  const navigate = useNavigate();
   const params = useParams();
   const projectId = Number(params.projectId);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const viewerRef = useRef<PanoramaViewerHandle | null>(null);
+  const autosaveTimerRef = useRef<number | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
   const [sceneStates, setSceneStates] = useState<SceneState[]>([]);
   const [selectedSceneStateId, setSelectedSceneStateId] = useState<number | null>(null);
   const [assets, setAssets] = useState<CharacterAsset[]>([]);
@@ -53,15 +58,23 @@ export default function ProjectEditor() {
   const [transformMode, setTransformMode] = useState<TransformMode>("translate");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const [projectDeleting, setProjectDeleting] = useState(false);
   const [sceneSaving, setSceneSaving] = useState(false);
-  const [sceneSaveStatus, setSceneSaveStatus] = useState<"idle" | "saved" | "error">("idle");
+  const [sceneSaveStatus, setSceneSaveStatus] = useState<SaveStatus>("saved");
   const [assetBusy, setAssetBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [panelsCollapsed, setPanelsCollapsed] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
+  const [cleanExport, setCleanExport] = useState(true);
   const [activeInspectorTab, setActiveInspectorTab] = useState<InspectorTab>("setup");
   const [error, setError] = useState<string | null>(null);
+  const [projectStatus, setProjectStatus] = useState<string | null>(null);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  const [sceneStatusMessage, setSceneStatusMessage] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
+  const [assetStatus, setAssetStatus] = useState<string | null>(null);
   const [instanceError, setInstanceError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -83,6 +96,8 @@ export default function ProjectEditor() {
           ? await api.listCharacterInstances(projectId, selectedSceneState.id)
           : [];
         setProject(loadedProject);
+        setProjectName(loadedProject.name);
+        setProjectDescription(loadedProject.description);
         setAssets(loadedAssets);
         setSceneStates(loadedSceneStates);
         setSelectedSceneStateId(selectedSceneState?.id ?? null);
@@ -102,6 +117,38 @@ export default function ProjectEditor() {
     instances.find((instance) => instance.id === selectedInstanceId) ?? null;
   const selectedSceneState =
     sceneStates.find((state) => state.id === selectedSceneStateId) ?? null;
+
+  useEffect(() => {
+    if (sceneSaveStatus !== "unsaved" || !selectedSceneState) {
+      return;
+    }
+
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+
+    const sceneStateId = selectedSceneState.id;
+    autosaveTimerRef.current = window.setTimeout(() => {
+      void saveSceneStateMetadata(sceneStateId, { autosave: true });
+    }, 800);
+
+    return () => {
+      if (autosaveTimerRef.current !== null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [
+    selectedSceneState?.id,
+    selectedSceneState?.name,
+    selectedSceneState?.description,
+    selectedSceneState?.shot_number,
+    selectedSceneState?.shot_size,
+    selectedSceneState?.camera_move,
+    selectedSceneState?.action_notes,
+    selectedSceneState?.prompt_notes,
+    sceneSaveStatus,
+  ]);
 
   if (loading) {
     return (
@@ -198,6 +245,10 @@ export default function ProjectEditor() {
     if (sceneStateId === selectedSceneStateId) {
       return;
     }
+    const savedCurrentScene = await persistSelectedSceneStateBeforeSceneChange();
+    if (!savedCurrentScene) {
+      return;
+    }
     const savedCurrentInstance = await persistSelectedInstanceBeforeSceneChange();
     if (!savedCurrentInstance) {
       return;
@@ -210,16 +261,75 @@ export default function ProjectEditor() {
     setSelectedSceneStateId(sceneStateId);
     try {
       await loadInstancesForScene(sceneStateId);
+      setSceneSaveStatus("saved");
+      setSceneStatusMessage(null);
     } catch (err) {
       setSceneError(err instanceof Error ? err.message : "Could not load scene state.");
     }
   }
 
   function mergeSceneState(sceneStateId: number, patch: Partial<SceneState>) {
-    setSceneSaveStatus("idle");
+    setSceneSaveStatus("unsaved");
+    setSceneStatusMessage(null);
     setSceneStates((current) =>
       current.map((state) => (state.id === sceneStateId ? { ...state, ...patch } : state)),
     );
+  }
+
+  async function saveSceneStateMetadata(
+    sceneStateId: number,
+    options: { autosave?: boolean } = {},
+  ): Promise<boolean> {
+    const sceneState = sceneStates.find((state) => state.id === sceneStateId);
+    if (!sceneState) {
+      return true;
+    }
+
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    setSceneSaving(true);
+    setSceneSaveStatus("saving");
+    setSceneError(null);
+    setSceneStatusMessage(null);
+    try {
+      const updated = await api.updateSceneState(activeProject.id, sceneState.id, {
+        name: sceneState.name,
+        description: sceneState.description,
+        shot_number: sceneState.shot_number,
+        shot_size: sceneState.shot_size,
+        camera_move: sceneState.camera_move,
+        action_notes: sceneState.action_notes,
+        prompt_notes: sceneState.prompt_notes,
+      });
+      setSceneStates((current) =>
+        current.map((state) =>
+          state.id === updated.id ? preserveLocalCameraFields(updated, state) : state,
+        ),
+      );
+      if (selectedSceneStateId === sceneStateId || !options.autosave) {
+        setSceneSaveStatus("saved");
+        setSceneStatusMessage("Scene state saved.");
+      }
+      return true;
+    } catch (err) {
+      if (selectedSceneStateId === sceneStateId || !options.autosave) {
+        setSceneSaveStatus("error");
+        setSceneError(err instanceof Error ? err.message : "Could not save scene state.");
+      }
+      return false;
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
+  async function persistSelectedSceneStateBeforeSceneChange(): Promise<boolean> {
+    if (!selectedSceneState || sceneSaveStatus === "saved") {
+      return true;
+    }
+    return saveSceneStateMetadata(selectedSceneState.id);
   }
 
   async function persistCurrentCameraBeforeSceneChange(): Promise<boolean> {
@@ -233,6 +343,7 @@ export default function ProjectEditor() {
     }
 
     setSceneError(null);
+    setSceneStatusMessage(null);
     try {
       const updated = await api.updateSceneState(
         activeProject.id,
@@ -251,9 +362,12 @@ export default function ProjectEditor() {
 
   async function createSceneState() {
     setSceneSaving(true);
-    setSceneSaveStatus("idle");
     setSceneError(null);
     try {
+      const savedCurrentScene = await persistSelectedSceneStateBeforeSceneChange();
+      if (!savedCurrentScene) {
+        return;
+      }
       const savedCurrentInstance = await persistSelectedInstanceBeforeSceneChange();
       if (!savedCurrentInstance) {
         return;
@@ -268,6 +382,7 @@ export default function ProjectEditor() {
       });
       setSceneStates((current) => [...current, state]);
       setSelectedSceneStateId(state.id);
+      setSceneSaveStatus("saved");
       setInstances([]);
       setSelectedInstanceId(null);
     } catch (err) {
@@ -282,30 +397,7 @@ export default function ProjectEditor() {
       return;
     }
 
-    setSceneSaving(true);
-    setSceneError(null);
-    try {
-      const updated = await api.updateSceneState(activeProject.id, selectedSceneState.id, {
-        name: selectedSceneState.name,
-        description: selectedSceneState.description,
-        shot_number: selectedSceneState.shot_number,
-        shot_size: selectedSceneState.shot_size,
-        camera_move: selectedSceneState.camera_move,
-        action_notes: selectedSceneState.action_notes,
-        prompt_notes: selectedSceneState.prompt_notes,
-      });
-      setSceneStates((current) =>
-        current.map((state) =>
-          state.id === updated.id ? preserveLocalCameraFields(updated, state) : state,
-        ),
-      );
-      setSceneSaveStatus("saved");
-    } catch (err) {
-      setSceneSaveStatus("error");
-      setSceneError(err instanceof Error ? err.message : "Could not save scene state.");
-    } finally {
-      setSceneSaving(false);
-    }
+    await saveSceneStateMetadata(selectedSceneState.id);
   }
 
   async function duplicateSelectedSceneState() {
@@ -316,6 +408,10 @@ export default function ProjectEditor() {
     setSceneSaving(true);
     setSceneError(null);
     try {
+      const savedCurrentScene = await persistSelectedSceneStateBeforeSceneChange();
+      if (!savedCurrentScene) {
+        return;
+      }
       const savedCurrentInstance = await persistSelectedInstanceBeforeSceneChange();
       if (!savedCurrentInstance) {
         return;
@@ -329,6 +425,8 @@ export default function ProjectEditor() {
       setSceneStates(loadedSceneStates);
       setSelectedSceneStateId(duplicated.id);
       await loadInstancesForScene(duplicated.id);
+      setSceneSaveStatus("saved");
+      setSceneStatusMessage(null);
     } catch (err) {
       setSceneError(err instanceof Error ? err.message : "Could not duplicate scene state.");
     } finally {
@@ -351,12 +449,49 @@ export default function ProjectEditor() {
       setSelectedSceneStateId(nextState?.id ?? null);
       if (nextState) {
         await loadInstancesForScene(nextState.id);
+        setSceneSaveStatus("saved");
+        setSceneStatusMessage(null);
       } else {
         setInstances([]);
         setSelectedInstanceId(null);
+        setSceneSaveStatus("saved");
+        setSceneStatusMessage(null);
       }
     } catch (err) {
       setSceneError(err instanceof Error ? err.message : "Could not delete scene state.");
+    } finally {
+      setSceneSaving(false);
+    }
+  }
+
+  async function moveSelectedSceneState(direction: -1 | 1) {
+    if (!selectedSceneState) {
+      return;
+    }
+
+    const ordered = [...sceneStates].sort(compareSceneStates);
+    const currentIndex = ordered.findIndex((state) => state.id === selectedSceneState.id);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= ordered.length) {
+      return;
+    }
+
+    [ordered[currentIndex], ordered[nextIndex]] = [ordered[nextIndex], ordered[currentIndex]];
+    const reordered = ordered.map((state, index) => ({ ...state, sort_order: index }));
+
+    setSceneSaving(true);
+    setSceneError(null);
+    setSceneStates(reordered);
+    try {
+      await Promise.all(
+        reordered.map((state) =>
+          api.updateSceneState(activeProject.id, state.id, { sort_order: state.sort_order }),
+        ),
+      );
+    } catch (err) {
+      setSceneError(err instanceof Error ? err.message : "Could not reorder scenes.");
+      const loadedSceneStates = await api.listSceneStates(activeProject.id);
+      setSceneStates(loadedSceneStates);
     } finally {
       setSceneSaving(false);
     }
@@ -375,7 +510,7 @@ export default function ProjectEditor() {
     const patch = cameraSnapshotPatch(snapshot);
     mergeSceneState(selectedSceneState.id, patch);
     setSceneSaving(true);
-    setSceneSaveStatus("idle");
+    setSceneSaveStatus("saving");
     setSceneError(null);
     try {
       const updated = await api.updateSceneState(activeProject.id, selectedSceneState.id, patch);
@@ -383,6 +518,7 @@ export default function ProjectEditor() {
         current.map((state) => (state.id === updated.id ? updated : state)),
       );
       setSceneSaveStatus("saved");
+      setSceneStatusMessage("Camera saved.");
     } catch (err) {
       setSceneSaveStatus("error");
       setSceneError(err instanceof Error ? err.message : "Could not save camera.");
@@ -398,38 +534,133 @@ export default function ProjectEditor() {
     mergeSceneState(selectedSceneState.id, cameraSnapshotPatch(snapshot));
   }
 
-  function downloadScreenshot() {
+  async function saveProjectMetadata() {
+    setProjectSaving(true);
+    setProjectStatus(null);
+    setError(null);
+    try {
+      const updated = await api.updateProject(activeProject.id, {
+        name: projectName,
+        description: projectDescription,
+      });
+      setProject(updated);
+      setProjectName(updated.name);
+      setProjectDescription(updated.description);
+      setProjectStatus("Project saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save project.");
+    } finally {
+      setProjectSaving(false);
+    }
+  }
+
+  async function deleteCurrentProject() {
+    if (!window.confirm("Delete this project and its local uploads? This cannot be undone.")) {
+      return;
+    }
+
+    setProjectDeleting(true);
+    setError(null);
+    try {
+      await api.deleteProject(activeProject.id);
+      navigate("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete project.");
+      setProjectDeleting(false);
+    }
+  }
+
+  async function resetSelectedTransform() {
+    if (!selectedInstance) {
+      return;
+    }
+    const patch: CharacterInstanceUpdate = {
+      position_x: 0,
+      position_y: 0,
+      position_z: -2,
+      rotation_x: 0,
+      rotation_y: 0,
+      rotation_z: 0,
+      scale: 1,
+    };
+    mergeInstance(selectedInstance.id, patch);
+    await persistInstance(selectedInstance.id, patch);
+  }
+
+  function focusSelectedInstance() {
+    if (!selectedInstance) {
+      return;
+    }
+    viewerRef.current?.focusTarget({
+      x: selectedInstance.position_x,
+      y: selectedInstance.position_y,
+      z: selectedInstance.position_z,
+    });
+  }
+
+  async function downloadScreenshot() {
     if (!selectedSceneState) {
       return;
     }
-    const dataUrl = viewerRef.current?.captureScreenshot();
-    if (!dataUrl) {
-      setSceneError("Screenshot is not ready yet.");
-      return;
+    setExportBusy(true);
+    setExportStatus(null);
+    const restoreGuides = cleanExport && showGuide;
+    try {
+      if (restoreGuides) {
+        setShowGuide(false);
+        await waitForViewerFrame();
+      }
+      const dataUrl = viewerRef.current?.captureScreenshot();
+      if (!dataUrl) {
+        setSceneError("Screenshot is not ready yet.");
+        return;
+      }
+      downloadUrl(
+        dataUrl,
+        `project-${activeProject.id}-shot-${selectedSceneState.shot_number}-scene-${selectedSceneState.id}.png`,
+      );
+      setExportStatus("Screenshot downloaded.");
+    } finally {
+      if (restoreGuides) {
+        setShowGuide(true);
+      }
+      setExportBusy(false);
     }
-    downloadUrl(dataUrl, `project-${activeProject.id}-scene-${selectedSceneState.id}.png`);
   }
 
   async function downloadSceneJson() {
     if (!selectedSceneState) {
       return;
     }
+    setExportBusy(true);
+    setExportStatus(null);
     setSceneError(null);
     try {
       const payload = await api.exportSceneJson(activeProject.id, selectedSceneState.id);
-      downloadJson(payload, `project-${activeProject.id}-scene-${selectedSceneState.id}.json`);
+      downloadJson(
+        payload,
+        `project-${activeProject.id}-shot-${selectedSceneState.shot_number}-scene-${selectedSceneState.id}.json`,
+      );
+      setExportStatus("JSON downloaded.");
     } catch (err) {
       setSceneError(err instanceof Error ? err.message : "Could not export scene JSON.");
+    } finally {
+      setExportBusy(false);
     }
   }
 
   async function downloadProjectPackage() {
+    setExportBusy(true);
+    setExportStatus(null);
     setSceneError(null);
     try {
       const blob = await api.downloadProjectPackage(activeProject.id);
       downloadBlob(blob, `project-${activeProject.id}-export.zip`);
+      setExportStatus("Package downloaded.");
     } catch (err) {
       setSceneError(err instanceof Error ? err.message : "Could not export project package.");
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -449,9 +680,11 @@ export default function ProjectEditor() {
 
     setAssetBusy(true);
     setAssetError(null);
+    setAssetStatus(null);
     try {
       const asset = await api.uploadCharacterAsset(activeProject.id, file);
       setAssets((current) => [asset, ...current]);
+      setAssetStatus("GLB uploaded.");
     } catch (err) {
       setAssetError(err instanceof Error ? err.message : "Could not upload model.");
     } finally {
@@ -530,7 +763,7 @@ export default function ProjectEditor() {
             disabled={sceneSaving || !selectedSceneState}
             onClick={() => void saveSelectedSceneState()}
           >
-            {sceneSaving ? "Saving..." : sceneSaveStatus === "saved" ? "Saved" : "Save"}
+            {sceneSaveStatus === "saving" ? "Saving..." : "Save"}
           </button>
           <button
             className="accent-action"
@@ -698,6 +931,51 @@ export default function ProjectEditor() {
         <div className="inspector-scroll">
           {activeInspectorTab === "setup" ? (
             <>
+              <section className="panel create-panel">
+                <div className="panel-heading">
+                  <h2>Project</h2>
+                  <span className={projectStatus ? "badge ok" : "badge"}>{projectStatus ?? "Editable"}</span>
+                </div>
+                <label>
+                  Name
+                  <input
+                    value={projectName}
+                    onChange={(event) => {
+                      setProjectName(event.target.value);
+                      setProjectStatus(null);
+                    }}
+                  />
+                </label>
+                <label>
+                  Description
+                  <textarea
+                    rows={3}
+                    value={projectDescription}
+                    onChange={(event) => {
+                      setProjectDescription(event.target.value);
+                      setProjectStatus(null);
+                    }}
+                  />
+                </label>
+                <div className="row-actions full-width">
+                  <button
+                    type="button"
+                    disabled={projectSaving || projectDeleting}
+                    onClick={() => void saveProjectMetadata()}
+                  >
+                    {projectSaving ? "Saving..." : "Save project"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={projectDeleting}
+                    onClick={() => void deleteCurrentProject()}
+                  >
+                    {projectDeleting ? "Deleting..." : "Delete project"}
+                  </button>
+                </div>
+                {error ? <p className="error-text">{error}</p> : null}
+              </section>
+
               <UploadPanel
                 title="Source reference"
                 helperText="Normal room or environment image."
@@ -733,7 +1011,7 @@ export default function ProjectEditor() {
               <div className="panel-heading">
                 <h2>Shot planner</h2>
                 <span className={sceneSaveStatus === "saved" ? "badge ok" : "badge"}>
-                  {sceneSaving ? "Saving" : sceneSaveStatus === "saved" ? "Saved" : "Ready"}
+                  {formatSaveStatus(sceneSaveStatus)}
                 </span>
               </div>
               <label>
@@ -786,7 +1064,7 @@ export default function ProjectEditor() {
                   </select>
                 </label>
                 <label>
-                  Camera
+                  Camera move
                   <select
                     value={selectedSceneState.camera_move}
                     onChange={(event) =>
@@ -845,7 +1123,7 @@ export default function ProjectEditor() {
                 data-testid="save-scene-state"
                 onClick={() => void saveSelectedSceneState()}
               >
-                {sceneSaving ? "Saving..." : sceneSaveStatus === "saved" ? "Saved" : "Save state"}
+                {sceneSaveStatus === "saving" ? "Saving..." : "Save state"}
               </button>
               <div className="row-actions full-width">
                 <button
@@ -863,17 +1141,24 @@ export default function ProjectEditor() {
                 >
                   Save camera
                 </button>
-                <button type="button" data-testid="download-screenshot" onClick={downloadScreenshot}>
+                <button
+                  type="button"
+                  disabled={exportBusy}
+                  data-testid="download-screenshot"
+                  onClick={() => void downloadScreenshot()}
+                >
                   Screenshot
                 </button>
                 <button
                   type="button"
+                  disabled={exportBusy}
                   data-testid="download-scene-json"
                   onClick={() => void downloadSceneJson()}
                 >
                   Scene JSON
                 </button>
               </div>
+              {sceneStatusMessage ? <p className="success-text">{sceneStatusMessage}</p> : null}
               {sceneError ? <p className="error-text">{sceneError}</p> : null}
             </section>
           ) : null}
@@ -919,6 +1204,7 @@ export default function ProjectEditor() {
                   ))}
                   {assets.length === 0 ? <p className="muted">No GLB assets yet.</p> : null}
                 </div>
+                {assetStatus ? <p className="success-text">{assetStatus}</p> : null}
                 {assetError ? <p className="error-text">{assetError}</p> : null}
               </section>
 
@@ -945,6 +1231,20 @@ export default function ProjectEditor() {
                 </div>
                 {selectedInstance ? (
                   <div className="row-actions full-width">
+                    <button
+                      type="button"
+                      data-testid="reset-transform"
+                      onClick={() => void resetSelectedTransform()}
+                    >
+                      Reset transform
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="focus-selected"
+                      onClick={focusSelectedInstance}
+                    >
+                      Focus selected
+                    </button>
                     <button type="button" onClick={() => duplicateInstance(selectedInstance.id)}>
                       Duplicate
                     </button>
@@ -963,6 +1263,14 @@ export default function ProjectEditor() {
                       />
                       Visible
                     </label>
+                    <label className="inline-check">
+                      <input
+                        type="checkbox"
+                        checked={!showGuide}
+                        onChange={(event) => setShowGuide(!event.target.checked)}
+                      />
+                      Hide guides
+                    </label>
                   </div>
                 ) : null}
                 {instanceError ? <p className="error-text">{instanceError}</p> : null}
@@ -977,12 +1285,26 @@ export default function ProjectEditor() {
               <h2>Prompt export</h2>
               <span>Local</span>
             </div>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={cleanExport}
+                onChange={(event) => setCleanExport(event.target.checked)}
+              />
+              Clean export: hide grid and transform controls in screenshot
+            </label>
             <div className="row-actions full-width">
-              <button type="button" data-testid="download-screenshot" onClick={downloadScreenshot}>
-                Screenshot
+              <button
+                type="button"
+                disabled={exportBusy}
+                data-testid="download-screenshot"
+                onClick={() => void downloadScreenshot()}
+              >
+                {exportBusy ? "Working..." : "Screenshot"}
               </button>
               <button
                 type="button"
+                disabled={exportBusy}
                 data-testid="download-scene-json"
                 onClick={() => void downloadSceneJson()}
               >
@@ -1016,11 +1338,14 @@ export default function ProjectEditor() {
             <button
               className="secondary-button"
               type="button"
+              disabled={exportBusy}
               data-testid="download-project-package"
               onClick={() => void downloadProjectPackage()}
             >
               Download project package
             </button>
+            {exportStatus ? <p className="success-text">{exportStatus}</p> : null}
+            {sceneError ? <p className="error-text">{sceneError}</p> : null}
             </section>
           ) : null}
         </div>
@@ -1029,7 +1354,7 @@ export default function ProjectEditor() {
           Scenes <span style={{fontWeight: 'normal', color: 'var(--text-dim)'}}>{sceneStates.length}</span>
         </div>
         <div className="scene-list">
-          {sceneStates.map((state, index) => (
+          {sceneStates.map((state) => (
             <button
               className={state.id === selectedSceneStateId ? "scene-row selected" : "scene-row"}
               data-testid={`scene-state-${state.id}`}
@@ -1039,12 +1364,29 @@ export default function ProjectEditor() {
             >
               <span>{state.name}</span>
               <small>
-                {index === 0 ? "Base Scene" : `Scene ${index + 1}`} / {state.shot_size} / {state.camera_move}
+                Shot {state.shot_number} / {state.shot_size}
+                {state.id === selectedSceneStateId ? ` / ${instances.length} objects` : ""}
               </small>
             </button>
           ))}
         </div>
         <div className="row-actions full-width" style={{borderTop: '1px solid var(--line-hard)', padding: '4px'}}>
+          <button
+            type="button"
+            disabled={sceneSaving || !selectedSceneState}
+            data-testid="move-scene-up"
+            onClick={() => void moveSelectedSceneState(-1)}
+          >
+            Up
+          </button>
+          <button
+            type="button"
+            disabled={sceneSaving || !selectedSceneState}
+            data-testid="move-scene-down"
+            onClick={() => void moveSelectedSceneState(1)}
+          >
+            Down
+          </button>
           <button type="button" disabled={sceneSaving} onClick={() => void createSceneState()}>
             New
           </button>
@@ -1143,6 +1485,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function formatSaveStatus(status: SaveStatus): string {
+  if (status === "unsaved") {
+    return "Unsaved";
+  }
+  if (status === "saving") {
+    return "Saving";
+  }
+  if (status === "error") {
+    return "Error";
+  }
+  return "Saved";
+}
+
+function compareSceneStates(a: SceneState, b: SceneState): number {
+  return a.sort_order === b.sort_order ? a.id - b.id : a.sort_order - b.sort_order;
+}
+
 function instancePatch(instance: CharacterInstance): CharacterInstanceUpdate {
   return {
     name: instance.name,
@@ -1214,10 +1573,14 @@ function buildPrompts(
   const summary = buildCharacterSummary(instances);
   const action = sceneState.action_notes.trim() || "No action notes provided.";
   const notes = sceneState.prompt_notes.trim() || "No extra style notes provided.";
+  const description = sceneState.description.trim() || "No scene description provided.";
   const image = [
     `Create a cinematic ${sceneState.shot_size} frame inside the provided 360 environment.`,
     `Project: ${project.name}.`,
-    `Scene state: ${sceneState.name}.`,
+    `Shot ${sceneState.shot_number}: ${sceneState.name}.`,
+    `Scene description: ${description}.`,
+    `Shot size: ${sceneState.shot_size}.`,
+    `Camera move: ${sceneState.camera_move}.`,
     `Camera: FOV ${round(sceneState.camera_fov)}.`,
     `Characters: ${summary}.`,
     `Action: ${action}.`,
@@ -1225,9 +1588,10 @@ function buildPrompts(
     "Keep character identity and placement consistent with the reference layout.",
   ].join(" ");
   const video = [
-    "Generate a short cinematic video based on this scene state.",
+    `Generate a short cinematic video for shot ${sceneState.shot_number}: ${sceneState.name}.`,
     `Camera move: ${sceneState.camera_move}.`,
     `Shot size: ${sceneState.shot_size}.`,
+    `Scene description: ${description}.`,
     `Character blocking: ${summary}.`,
     `Action: ${action}.`,
     "Preserve the same 360 environment, character positions, scale, and orientation unless the action notes specify movement.",
@@ -1278,6 +1642,14 @@ function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   downloadUrl(url, filename);
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function waitForViewerFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function PromptBlock({

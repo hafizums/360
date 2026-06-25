@@ -31,6 +31,7 @@ type PanoramaViewerProps = {
 export type PanoramaViewerHandle = {
   getCameraSnapshot: () => CameraSnapshot | null;
   captureScreenshot: () => string | null;
+  focusTarget: (target: { x: number; y: number; z: number }) => void;
 };
 
 type ViewerSceneProps = Omit<PanoramaViewerProps, "imageUrl" | "viewerRef"> & {
@@ -276,6 +277,14 @@ export default function PanoramaViewer({
       };
     },
     captureScreenshot: () => canvasRef.current?.toDataURL("image/png") ?? null,
+    focusTarget: (target) => {
+      const controls = controlsRef.current;
+      if (!controls) {
+        return;
+      }
+      controls.target.set(target.x, target.y, target.z);
+      controls.update();
+    },
   }));
 
   if (!imageUrl) {

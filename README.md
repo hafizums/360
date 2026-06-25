@@ -63,7 +63,7 @@ Uploaded files are stored under `backend/uploads/project_<id>/` and are served f
 
 Uploads are local-only and limited by default to 25 MB per file. Supported image extensions are `jpg`, `jpeg`, `png`, and `webp`. Images are validated with Pillow, and panoramas must be 2:1 equirectangular images. Very large images are rejected before they can exhaust memory; by default, images are limited to 12,000 pixels on either side and 50,000,000 total pixels.
 
-Character model uploads are GLB-only and limited by default to 100 MB per file. GLB files are stored under `backend/uploads/project_<id>/models/` and validated by extension plus the binary GLB magic header.
+Character model uploads are GLB-only and limited by default to 100 MB per file. GLB files are stored under `backend/uploads/project_<id>/models/` and validated by extension plus the binary GLB header: magic `glTF`, version `2`, minimum 12-byte header, and declared total length matching the uploaded file size.
 
 You can override upload limits for local development or tests with environment variables:
 
@@ -96,20 +96,23 @@ VITE_API_URL=http://127.0.0.1:8000
 
 1. Open `http://127.0.0.1:5173`.
 2. Create a project with a name and optional description.
-3. In the editor sidebar, upload a normal source reference image.
-4. Upload a panorama image using the 360 panorama panel.
-5. The panorama must be a 2:1 equirectangular image, such as `4096x2048` or `2048x1024`.
-6. Upload a `.glb` character model in the Character assets panel.
-7. Add the character to `Base Scene`.
-8. Adjust the camera view and click `Save camera`.
-9. Fill shot number, shot size, camera move, action notes, and prompt notes.
-10. Download a screenshot and scene JSON for the selected state.
-11. Copy the image and video prompts from Prompt export.
-12. Duplicate `Base Scene` to make the next shot.
-13. Move the character differently in the duplicated state and save its camera.
-14. Switch between scene states and confirm the camera, object list, and viewer placements change.
-15. Download the project package ZIP.
-16. Refresh the browser and confirm scene states, shot metadata, camera framing, and placements persist.
+3. In Setup, optionally rename the project or edit its description.
+4. Upload a normal source reference image.
+5. Upload a panorama image using the 360 panorama panel.
+6. The panorama must be a 2:1 equirectangular image, such as `4096x2048` or `2048x1024`.
+7. Upload a `.glb` character model in the Character assets panel.
+8. Add the character to `Base Scene`.
+9. Use Reset transform, Focus selected, Hide guides, and the transform fields as needed.
+10. Adjust the camera view and click `Save camera`.
+11. Fill shot number, shot size, camera move, action notes, and prompt notes. Scene metadata autosaves after a short debounce; the manual Save state button remains available.
+12. Download a clean screenshot and scene JSON for the selected state.
+13. Copy the image and video prompts from Prompt export.
+14. Duplicate or create scene states for new shots, then use Up/Down to reorder them.
+15. Move the character differently in another state and save its camera.
+16. Switch between scene states and confirm camera, object list, and viewer placements change.
+17. Download the project package ZIP.
+18. Refresh the browser and confirm scene states, shot metadata, camera framing, ordering, and placements persist.
+19. Use Delete project only when you want to remove the project metadata and its local `uploads/project_<id>/` folder.
 
 ## Scene States / Shot States
 
@@ -132,7 +135,13 @@ Use scene states for shot or beat variations:
 
 Duplicating a scene state copies all character placements into a new state named `{original name} Copy`. This is the fastest way to create the next shot while preserving the previous arrangement.
 
+Scene metadata autosaves after about 800 ms once fields change. The status badge shows Unsaved, Saving, Saved, or Error. When switching scene states, pending metadata, transform, and camera changes are saved before the next state loads.
+
+Use the scene list Up and Down buttons to change `scene_state.sort_order`. Ordering is saved through the backend and restored after refresh.
+
 Deleting a scene state deletes only the character instances in that state. It does not delete character assets or GLB model files. Deleting the last scene state is blocked.
+
+Deleting a project removes project metadata and related scene, character asset, and character instance rows. It also deletes only the local `backend/uploads/project_<id>/` folder after safety checks. Files outside that exact project upload folder are not deleted.
 
 ## Camera Save / Restore
 
@@ -140,13 +149,17 @@ The panorama viewer exposes the current camera position, OrbitControls target, a
 
 Switching scene states restores that state's saved camera framing. `Reset camera` reloads the currently selected scene state's saved camera values.
 
+Use `Zoom / FOV` to adjust camera zoom numerically. Lower FOV zooms in; higher FOV widens the view. `Drone view` applies an overhead camera preset that can be saved like any other camera framing.
+
 ## Exports
 
-Screenshot export is browser-local. Click `Download screenshot` to save the current viewer canvas as `project-{projectId}-scene-{sceneStateId}.png`.
+Screenshot export is browser-local. Click `Download screenshot` to save the current viewer canvas as `project-{projectId}-shot-{shotNumber}-scene-{sceneStateId}.png`.
 
-Scene JSON export is served by `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`. It includes project metadata, panorama/source paths, selected scene state metadata, saved camera metadata, character assets used by the scene, character instances, coordinate convention, prompts, and a `generated_at` timestamp.
+Clean export is enabled by default in the Export panel. When enabled, grid and transform controls are temporarily hidden for the screenshot, then restored in the editor afterward.
 
-Prompt export is deterministic and local. It does not call an LLM or provider. The panel provides copy buttons for:
+Scene JSON export is served by `GET /api/projects/{project_id}/scene-states/{scene_state_id}/export-json`. It downloads as `project-{projectId}-shot-{shotNumber}-scene-{sceneStateId}.json` and includes project metadata, panorama/source paths, selected scene state metadata, saved camera metadata, character assets used by the scene, character instances, coordinate convention, prompts, and a `generated_at` timestamp.
+
+Prompt export is deterministic and local. It includes shot number, shot size, camera move, scene description, action notes, prompt notes, and character placement. It does not call an LLM or provider. The panel provides copy buttons for:
 
 - Image reference prompt.
 - Video prompt.
@@ -162,9 +175,12 @@ Project package export is served by `GET /api/projects/{project_id}/export-packa
 3. Select the placed character in the Objects panel or in the 3D viewer.
 4. Use Move, Rotate, and Scale modes to edit the selected character with TransformControls.
 5. Use the inspector to fine tune name, position, rotation, scale, and visibility, then save.
-6. Duplicate an instance to create another placement of the same asset.
-7. Refresh the browser and confirm the placements remain.
-8. Delete one instance and confirm other placements remain.
+6. Use Reset transform to return the selected instance to `x=0`, `y=0`, `z=-2`, rotation `0,0,0`, scale `1`.
+7. Use Focus selected to aim the camera target at the selected character without changing the character transform.
+8. Use Hide guides to hide the grid and transform controls while keeping objects selectable from the object list.
+9. Duplicate an instance to create another placement of the same asset.
+10. Refresh the browser and confirm the placements remain.
+11. Delete one instance and confirm other placements remain.
 
 Refreshing the browser keeps project metadata, uploaded image paths, character assets, scene states, and character placements because they are stored in SQLite.
 
@@ -182,6 +198,7 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 - `POST /api/projects`
 - `GET /api/projects/{project_id}`
 - `PATCH /api/projects/{project_id}`
+- `DELETE /api/projects/{project_id}`
 - `POST /api/projects/{project_id}/upload-source`
 - `POST /api/projects/{project_id}/upload-panorama`
 - `GET /api/projects/{project_id}/scene-states`
@@ -202,6 +219,8 @@ Refreshing the browser keeps project metadata, uploaded image paths, character a
 - `POST /api/projects/{project_id}/character-instances/{instance_id}/duplicate`
 
 `PATCH /api/projects/{project_id}` only updates project metadata: `name` and `description`. Direct editing of `source_image_path` and `panorama_image_path` is intentionally blocked so uploaded files remain managed by the upload endpoints, including validation and old-file cleanup.
+
+`DELETE /api/projects/{project_id}` deletes project metadata and related database rows, then safely deletes only `backend/uploads/project_<id>/` if it is inside the configured upload root.
 
 `GET /api/projects/{project_id}/character-instances` accepts an optional `scene_state_id` query parameter. If omitted, the backend uses the project's first/default scene state. Creating an instance also accepts optional `scene_state_id`.
 
@@ -233,9 +252,9 @@ npm run e2e:install
 npm run e2e
 ```
 
-The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server on `127.0.0.1:5174`. It uses isolated local test storage under `frontend/.e2e/`, creates generated image/GLB fixtures at runtime, uploads them through the UI, verifies the 3D canvas can render/export, saves shot metadata/camera state, and checks JSON/ZIP exports.
+The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server on `127.0.0.1:5174`. It uses isolated local test storage under `frontend/.e2e/`, creates generated image/GLB fixtures at runtime, uploads them through the UI, verifies the 3D canvas can render/export, checks autosave, reset transform, focus selected, clean screenshot export, JSON/ZIP exports, scene ordering, missing favicon/static resources, and project deletion.
 
-## Milestone 4 Manual Test
+## Milestone 5 Manual Test
 
 1. Start the backend with `uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`.
 2. Start the frontend with `npm run dev`.
@@ -244,18 +263,21 @@ The e2e suite starts its own FastAPI server on `127.0.0.1:8010` and Vite server 
 5. Select `Base Scene`.
 6. Upload a panorama and GLB if needed.
 7. Add a character placement.
-8. Adjust the camera view.
-9. Click `Save camera`.
-10. Fill shot number, shot size, camera move, action notes, and prompt notes.
-11. Click `Download screenshot`.
-12. Click `Download scene JSON`.
-13. Copy the image prompt and video prompt.
-14. Duplicate the scene state.
-15. Move the character in the duplicated state.
-16. Save camera for the duplicated state.
-17. Switch between states and confirm camera framing and placements change.
-18. Click `Download project package`.
-19. Run backend tests and the frontend build.
+8. Use Reset transform and Focus selected on the character.
+9. Adjust the camera view, Zoom / FOV, or Drone view.
+10. Click `Save camera`.
+11. Fill shot number, shot size, camera move, action notes, and prompt notes; confirm autosave reaches Saved.
+12. Enable Clean export and click `Download screenshot`.
+13. Click `Download scene JSON`.
+14. Copy the image prompt and video prompt.
+15. Duplicate or create a scene state.
+16. Move the character in the duplicated state.
+17. Use Up/Down to reorder scene states.
+18. Switch between states and confirm camera framing and placements change.
+19. Click `Download project package`.
+20. Rename the project and save it.
+21. Delete a disposable project and confirm it returns to the project list.
+22. Run backend tests, frontend build, and e2e.
 
 ## Future Module Boundaries
 

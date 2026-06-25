@@ -5,26 +5,38 @@ import { deflateSync } from "node:zlib";
 
 const API_BASE_URL = "http://127.0.0.1:8010";
 
-test("milestone 4 editor flow survives real browser use", async ({ page }, testInfo) => {
+test("milestone 5 editor flow survives real browser use", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
   const fixturesDir = testInfo.outputPath("fixtures");
   await fs.mkdir(fixturesDir, { recursive: true });
   const panoramaPath = path.join(fixturesDir, "e2e-panorama.png");
   const sourcePath = path.join(fixturesDir, "e2e-source.png");
   const modelPath = path.join(fixturesDir, "e2e-character.glb");
+  const projectName = `E2E Shot Planner ${Date.now()}`;
   await fs.writeFile(panoramaPath, createPng(512, 256));
   await fs.writeFile(sourcePath, createPng(320, 200));
   await fs.writeFile(modelPath, createEmptyGlb());
 
   const consoleErrors: string[] = [];
+  const missingResources: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error" && !message.text().includes("favicon")) {
+    if (message.type() === "error") {
       consoleErrors.push(message.text());
     }
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
+  page.on("response", (response) => {
+    const url = response.url();
+    if (
+      response.status() === 404 &&
+      (url.includes("favicon") || url.includes("/assets/") || url.includes("/static/"))
+    ) {
+      missingResources.push(url);
+    }
+  });
 
   await page.goto("/");
-  await page.getByLabel("Name").fill(`E2E Shot Planner ${Date.now()}`);
+  await page.getByLabel("Name").fill(projectName);
   await page.getByLabel("Description").fill("Playwright coverage for the 3D editor flow.");
   await page.getByRole("button", { name: "Create and open" }).click();
   await page.waitForURL(/\/projects\/\d+$/);
@@ -46,7 +58,7 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
     .toBe(true);
   await expect.poll(() => canvasDataUrlPrefix(page)).toBe("data:image/png;base64,");
 
-  await page.getByRole("button", { name: "Characters" }).click();
+  await inspectorTab(page, "Characters").click();
   await uploadWithButton(page, "Upload GLB", modelPath);
   await expect(page.getByText("e2e-character")).toBeVisible();
   await page.getByRole("button", { name: "Add" }).click();
@@ -56,25 +68,20 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
   await expect(page.getByLabel("Selected object transform")).toBeVisible();
   await expect.poll(() => floatingTransformIsInViewer(page)).toBe(true);
 
-  await page.getByRole("button", { name: "Shot" }).click();
+  await inspectorTab(page, "Shot").click();
   await dragCanvas(page);
   await page.getByLabel("Shot #").fill("7");
   await page.getByLabel("Shot size").selectOption("CU");
-  await page.getByLabel("Camera").selectOption("orbit");
+  await page.getByLabel("Camera move").selectOption("orbit");
+  await expect(page.getByLabel("Camera move")).toHaveValue("orbit");
   await page.getByLabel("Zoom / FOV").fill("45");
   await page.getByLabel("Action notes").fill("Character turns toward the window.");
   await page.getByLabel("Prompt notes").fill("Moody practical lighting, consistent layout.");
-  const saveStateRequest = page.waitForRequest(
-    (request) =>
-      request.method() === "PATCH" &&
-      request.url().includes(`/api/projects/${projectId}/scene-states/`) &&
-      request.postDataJSON().action_notes === "Character turns toward the window.",
-  );
+  const sceneStatus = page.locator(".scene-panel .badge");
+  await expect(sceneStatus).toHaveText("Unsaved");
+  await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
   await page.getByTestId("save-scene-state").click();
-  const saveStatePayload = (await saveStateRequest).postDataJSON();
-  expect(saveStatePayload.camera_position_x).toBeUndefined();
-  expect(saveStatePayload.camera_target_x).toBeUndefined();
-  expect(saveStatePayload.camera_fov).toBeUndefined();
+  await expect(sceneStatus).toHaveText("Saved", { timeout: 5000 });
   await page.getByTestId("drone-view").click();
   await expect(page.getByLabel("Zoom / FOV")).toHaveValue("55");
   await page.getByTestId("save-camera").click();
@@ -89,7 +96,7 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
   expect(state.action_notes).toBe("Character turns toward the window.");
   expect(state.prompt_notes).toBe("Moody practical lighting, consistent layout.");
 
-  await page.getByRole("button", { name: "Export" }).click();
+  await inspectorTab(page, "Export").click();
   await expect(page.getByText("Image reference prompt")).toBeVisible();
   await page.getByText("Image reference prompt").scrollIntoViewIfNeeded();
   await page.getByTestId("copy-image-prompt").click();
@@ -100,13 +107,13 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
   const screenshotDownload = page.waitForEvent("download");
   await page.getByTestId("download-screenshot").click();
   expect((await screenshotDownload).suggestedFilename()).toBe(
-    `project-${projectId}-scene-${state.id}.png`,
+    `project-${projectId}-shot-7-scene-${state.id}.png`,
   );
 
   const jsonDownload = page.waitForEvent("download");
   await page.getByTestId("download-scene-json").click();
   expect((await jsonDownload).suggestedFilename()).toBe(
-    `project-${projectId}-scene-${state.id}.json`,
+    `project-${projectId}-shot-7-scene-${state.id}.json`,
   );
 
   const sceneExport = await fetchJson(
@@ -117,6 +124,8 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
   expect(sceneExport.camera.target.y).toBe(0);
   expect(sceneExport.camera.fov).toBe(55);
   expect(sceneExport.character_instances).toHaveLength(1);
+  expect(sceneExport.prompts.image_reference_prompt).toContain("Shot 7");
+  expect(sceneExport.prompts.image_reference_prompt).toContain("Camera move: orbit");
   expect(sceneExport.prompts.image_reference_prompt).toContain("e2e-character");
 
   await page.getByTestId("duplicate-scene-state").click();
@@ -141,19 +150,61 @@ test("milestone 4 editor flow survives real browser use", async ({ page }, testI
     )
     .toBe(3.25);
 
+  await inspectorTab(page, "Characters").click();
+  await page.getByTestId("reset-transform").click();
+  await expect(page.getByLabel("Left/Right")).toHaveValue("0");
+  await expect(page.getByLabel("Depth")).toHaveValue("-2");
+  await page.getByTestId("focus-selected").click();
+  await inspectorTab(page, "Shot").click();
+  await page.getByTestId("save-camera").click();
+  await expect
+    .poll(() =>
+      listSceneStates(projectId).then(
+        (states) => states.find((item) => item.id === copiedState.id)?.camera_target_z,
+      ),
+    )
+    .toBe(-2);
+
   await page.reload();
   await expect(page.getByText("Texture loaded")).toBeVisible();
-  await page.getByRole("button", { name: "Shot" }).click();
+  await inspectorTab(page, "Shot").click();
   await expect(page.getByLabel("Shot #")).toHaveValue("7");
   await expect(page.getByLabel("Shot size")).toHaveValue("CU");
-  await expect(page.getByLabel("Camera")).toHaveValue("orbit");
+  await expect(page.getByLabel("Camera move")).toHaveValue("orbit");
   await expect(page.getByLabel("Zoom / FOV")).toHaveValue("55");
 
-  await page.getByRole("button", { name: "Export" }).click();
+  await inspectorTab(page, "Export").click();
   const packageDownload = page.waitForEvent("download");
   await page.getByTestId("download-project-package").click();
   expect((await packageDownload).suggestedFilename()).toBe(`project-${projectId}-export.zip`);
 
+  await page.getByRole("button", { name: "New" }).click();
+  await expect.poll(() => listSceneStates(projectId).then((states) => states.length)).toBe(3);
+  const newScene = (await listSceneStates(projectId)).find(
+    (sceneState: { name: string }) => sceneState.name === "Scene 3",
+  );
+  if (!newScene) {
+    throw new Error("Expected new scene state to exist.");
+  }
+  await page.getByTestId("move-scene-up").click();
+  await expect
+    .poll(() =>
+      listSceneStates(projectId).then((states) => states.findIndex((item) => item.id === newScene.id)),
+    )
+    .toBe(1);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await inspectorTab(page, "Setup").click();
+  await page.getByRole("button", { name: "Delete project" }).click();
+  await page.waitForURL("/");
+  await expect(page.getByText(projectName, { exact: true })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      fetch(`${API_BASE_URL}/api/projects/${projectId}`).then((response) => response.status),
+    )
+    .toBe(404);
+
+  expect(missingResources).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -165,6 +216,10 @@ async function uploadWithButton(
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: buttonName }).click();
   await (await chooser).setFiles(filePath);
+}
+
+function inspectorTab(page: Page, name: string) {
+  return page.locator(".inspector-tabs").getByRole("button", { name, exact: true });
 }
 
 async function dragCanvas(page: Page) {

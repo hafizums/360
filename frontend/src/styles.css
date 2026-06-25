@@ -116,6 +116,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 .empty-state h3{color:var(--text);margin-bottom:2px;font-size:0.70rem}
 .error-text{color:var(--danger);font-size:0.62rem}
 .warning-text{color:var(--warning);font-size:0.62rem}
+.success-text{color:var(--success);font-size:0.62rem}
 
 /* ═══ EDITOR SHELL ═══ */
 .editor-shell{

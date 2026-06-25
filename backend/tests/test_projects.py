@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import get_database_path, get_upload_dir
-from app.database import init_db
+from app.database import db_session, init_db
 from app.main import app
 
 
@@ -65,8 +65,31 @@ def upload_source(client: TestClient, project_id: int, image: BytesIO | None = N
     return response.json()
 
 
-def make_glb(payload: bytes = b"scene-stager") -> BytesIO:
-    buffer = BytesIO(b"glTF" + payload)
+def make_glb(json_payload: bytes = b'{"asset":{"version":"2.0"}}') -> BytesIO:
+    json_padding = (4 - (len(json_payload) % 4)) % 4
+    json_chunk = json_payload + (b" " * json_padding)
+    chunk_header = len(json_chunk).to_bytes(4, "little") + b"JSON"
+    total_length = 12 + len(chunk_header) + len(json_chunk)
+    header = b"glTF" + (2).to_bytes(4, "little") + total_length.to_bytes(4, "little")
+    buffer = BytesIO(header + chunk_header + json_chunk)
+    buffer.seek(0)
+    return buffer
+
+
+def make_glb_header(
+    *,
+    magic: bytes = b"glTF",
+    version: int = 2,
+    declared_length: int | None = None,
+    body: bytes = b"BODY",
+) -> BytesIO:
+    actual_length = 12 + len(body)
+    header = (
+        magic
+        + version.to_bytes(4, "little")
+        + (declared_length if declared_length is not None else actual_length).to_bytes(4, "little")
+    )
+    buffer = BytesIO(header + body)
     buffer.seek(0)
     return buffer
 
@@ -210,6 +233,73 @@ def test_patch_cannot_set_image_paths() -> None:
 
     assert response.status_code == 422
     assert "Extra inputs are not permitted" in response.text
+
+
+def test_delete_project_removes_db_rows() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        scene = list_scene_states(client, project["id"])[0]
+        asset = upload_character_asset(client, project["id"])
+        create_character_instance(client, project["id"], asset["id"], scene["id"])
+        response = client.delete(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    with db_session() as conn:
+        for table_name in (
+            "projects",
+            "scene_states",
+            "character_assets",
+            "character_instances",
+        ):
+            count = conn.execute(
+                f"SELECT COUNT(*) AS count FROM {table_name} WHERE project_id = ?"
+                if table_name != "projects"
+                else "SELECT COUNT(*) AS count FROM projects WHERE id = ?",
+                (project["id"],),
+            ).fetchone()["count"]
+            assert count == 0
+
+
+def test_delete_project_removes_upload_folder_safely() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        uploaded = upload_source(client, project["id"])
+        project_dir = public_path_to_file(uploaded["source_image_path"]).parent
+        assert project_dir.exists()
+        response = client.delete(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert not project_dir.exists()
+
+
+def test_delete_missing_project_returns_404() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        response = client.delete("/api/projects/404")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found"
+
+
+def test_delete_project_does_not_delete_files_outside_project_upload_folder() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        upload_source(client, project["id"])
+        sibling_dir = get_upload_dir() / "project_999"
+        sibling_dir.mkdir(parents=True, exist_ok=True)
+        sibling_file = sibling_dir / "keep.txt"
+        sibling_file.write_text("keep", encoding="utf-8")
+        root_file = get_upload_dir() / "keep.txt"
+        root_file.write_text("keep", encoding="utf-8")
+        response = client.delete(f"/api/projects/{project['id']}")
+
+    assert response.status_code == 200
+    assert sibling_file.exists()
+    assert root_file.exists()
 
 
 def test_upload_valid_source_image() -> None:
@@ -370,7 +460,52 @@ def test_reject_fake_glb_magic_header() -> None:
         project = create_project(client)
         response = client.post(
             f"/api/projects/{project['id']}/character-assets/upload",
-            files={"file": ("hero.glb", BytesIO(b"nope"), "model/gltf-binary")},
+            files={"file": ("hero.glb", make_glb_header(magic=b"nope"), "model/gltf-binary")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded model is not a valid GLB file."
+
+
+def test_reject_glb_bad_version() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={"file": ("hero.glb", make_glb_header(version=1), "model/gltf-binary")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded model is not a valid GLB file."
+
+
+def test_reject_glb_declared_length_mismatch() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={
+                "file": (
+                    "hero.glb",
+                    make_glb_header(declared_length=999),
+                    "model/gltf-binary",
+                )
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Uploaded model is not a valid GLB file."
+
+
+def test_reject_too_short_glb() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        response = client.post(
+            f"/api/projects/{project['id']}/character-assets/upload",
+            files={"file": ("hero.glb", BytesIO(b"glTF"), "model/gltf-binary")},
         )
 
     assert response.status_code == 400
@@ -565,6 +700,23 @@ def test_update_scene_state_name_description() -> None:
     payload = response.json()
     assert payload["name"] == "Opening Shot"
     assert payload["description"] == "Near sofa"
+
+
+def test_update_scene_state_sort_order() -> None:
+    reset_storage()
+    with TestClient(app) as client:
+        project = create_project(client)
+        base = list_scene_states(client, project["id"])[0]
+        second = create_scene_state(client, project["id"], "Shot 2")
+        response = client.patch(
+            f"/api/projects/{project['id']}/scene-states/{second['id']}",
+            json={"sort_order": -1},
+        )
+        states = list_scene_states(client, project["id"])
+
+    assert response.status_code == 200
+    assert response.json()["sort_order"] == -1
+    assert [state["id"] for state in states] == [second["id"], base["id"]]
 
 
 def test_delete_scene_state() -> None:

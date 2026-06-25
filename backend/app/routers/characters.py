@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from struct import unpack
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -20,6 +21,9 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["characters"])
 
 GLB_EXTENSION = ".glb"
 GLB_MAGIC = b"glTF"
+GLB_HEADER_BYTES = 12
+GLB_VERSION = 2
+INVALID_GLB_MESSAGE = "Uploaded model is not a valid GLB file."
 
 
 def ensure_project_exists(project_id: int) -> None:
@@ -104,14 +108,33 @@ def save_glb_model(project_id: int, file: UploadFile) -> Path:
             detail=f"Model upload is too large. Maximum size is {format_upload_size(max_model_bytes)}.",
         )
 
-    with destination.open("rb") as buffer:
-        magic = buffer.read(4)
-
-    if magic != GLB_MAGIC:
+    try:
+        validate_glb_file(destination)
+    except ValueError:
         destination.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail='Uploaded model is not a valid GLB file.')
+        raise HTTPException(status_code=400, detail=INVALID_GLB_MESSAGE)
 
     return destination
+
+
+def validate_glb_file(path: Path) -> None:
+    actual_size = path.stat().st_size
+    if actual_size < GLB_HEADER_BYTES:
+        raise ValueError("GLB file is too short.")
+
+    with path.open("rb") as buffer:
+        header = buffer.read(GLB_HEADER_BYTES)
+
+    magic = header[:4]
+    version = unpack("<I", header[4:8])[0]
+    declared_length = unpack("<I", header[8:12])[0]
+
+    if magic != GLB_MAGIC:
+        raise ValueError("GLB magic header is invalid.")
+    if version != GLB_VERSION:
+        raise ValueError("GLB version is invalid.")
+    if declared_length != actual_size:
+        raise ValueError("GLB declared length does not match file size.")
 
 
 def public_upload_path(path: Path) -> str:

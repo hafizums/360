@@ -93,6 +93,7 @@ export type SceneStateUpdate = Partial<
     SceneState,
     | "name"
     | "description"
+    | "sort_order"
     | "shot_number"
     | "shot_size"
     | "camera_move"
@@ -162,6 +163,10 @@ export const api = {
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  deleteProject: (id: number) =>
+    request<{ deleted: boolean }>(`/api/projects/${id}`, {
+      method: "DELETE",
     }),
   uploadSource: (id: number, file: File) => uploadImage(id, "upload-source", file),
   uploadPanorama: (id: number, file: File) => uploadImage(id, "upload-panorama", file),

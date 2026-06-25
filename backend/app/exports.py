@@ -22,17 +22,21 @@ def build_character_summary(instances: list[dict]) -> str:
 
 def build_prompts(project: dict, scene_state: dict, instances: list[dict]) -> dict[str, str]:
     character_summary = build_character_summary(instances)
+    description = scene_state["description"] or "No scene description provided."
     image_prompt = (
         f"Create a cinematic {scene_state['shot_size']} frame inside the provided 360 environment. "
-        f"Project: {project['name']}. Scene state: {scene_state['name']}. "
-        f"Camera: FOV {scene_state['camera_fov']:.1f}. Characters: {character_summary}. "
+        f"Project: {project['name']}. Shot {scene_state['shot_number']}: {scene_state['name']}. "
+        f"Scene description: {description}. Shot size: {scene_state['shot_size']}. "
+        f"Camera move: {scene_state['camera_move']}. Camera: FOV {scene_state['camera_fov']:.1f}. "
+        f"Characters: {character_summary}. "
         f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
         f"Style/notes: {scene_state['prompt_notes'] or 'No extra style notes provided.'}. "
         "Keep character identity and placement consistent with the reference layout."
     )
     video_prompt = (
-        "Generate a short cinematic video based on this scene state. "
+        f"Generate a short cinematic video for shot {scene_state['shot_number']}: {scene_state['name']}. "
         f"Camera move: {scene_state['camera_move']}. Shot size: {scene_state['shot_size']}. "
+        f"Scene description: {description}. "
         f"Character blocking: {character_summary}. "
         f"Action: {scene_state['action_notes'] or 'No action notes provided.'}. "
         "Preserve the same 360 environment, character positions, scale, and orientation unless the action notes specify movement."

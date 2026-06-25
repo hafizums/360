@@ -26,6 +26,7 @@ export default function UploadPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -36,12 +37,14 @@ export default function UploadPanel({
     setBusy(true);
     setError(null);
     setWarning(null);
+    setStatus(null);
     try {
       if (validateFile) {
         setWarning(await validateFile(file));
       }
       const project = await onUpload(file);
       onUploaded(project);
+      setStatus("Uploaded.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -75,6 +78,7 @@ export default function UploadPanel({
         {busy ? "Uploading..." : buttonText}
       </button>
       {currentPath ? <p className="file-path">{currentPath}</p> : null}
+      {status ? <p className="success-text">{status}</p> : null}
       {warning ? <p className="warning-text">{warning}</p> : null}
       {error ? <p className="error-text">{error}</p> : null}
     </section>
